@@ -1,0 +1,527 @@
+---
+title: "Predictive Analytics DATA 624 Assignment 1"
+author: "Mehreen Ali Gillani"
+date: "2026-01-29"
+output:
+  html_document: default
+  pdf_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#load libraries
+library(fpp3)
+library(ggplot2)
+library(patchwork)
+library(tidyverse)
+```
+
+2.10 Exercises
+
+1.  Explore the following four time series: Bricks from aus_production,
+    Lynx from pelt, Close from gafa_stock, Demand from vic_elec.
+
+Use ? (or help()) to find out about the data in each series. What is the
+time interval of each series? Use autoplot() to produce a time plot of
+each series. For the last plot, modify the axis labels and title.
+
+```{r}
+# 1. Explore the data and find out about each series
+# Bricks from aus_production
+?aus_production
+
+# Lynx from pelt
+?pelt
+
+
+# Close from gafa_stock
+?gafa_stock
+
+# Demand from vic_elec
+?vic_elec
+
+```
+
+```{r}
+# 2. Check the time interval of each series
+# Create the series objects
+bricks_ts <- aus_production %>% select(Bricks)
+lynx_ts <- pelt %>% select(Lynx)
+close_ts <- gafa_stock %>% select(Close)
+demand_ts <- vic_elec %>% select(Demand)
+```
+
+```{r}
+print("Checking tsibble structure:")
+print(bricks_ts)
+print(lynx_ts)
+print(close_ts)
+print(demand_ts)
+```
+
+```{r}
+# 3. Create time plots using autoplot()
+
+# Plot 1: Bricks from aus_production
+p1 <- autoplot(bricks_ts, Bricks) +
+  ggtitle("Australian Bricks Production") +
+  ylab("Production") +
+  theme_minimal()
+
+# Plot 2: Lynx from pelt
+p2 <- autoplot(lynx_ts, Lynx) +
+  ggtitle("Canadian Lynx Pelts") +
+  ylab("Number of pelts") +
+  theme_minimal()
+
+# Plot 3: Close from gafa_stock
+p3 <- gafa_stock %>%
+  autoplot(Close) +
+  ggtitle("GAFA Stock Closing Prices") +
+  ylab("Price (USD)") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# Plot 4: Demand from vic_elec (with modified labels as requested)
+p4 <- autoplot(demand_ts, Demand) +
+  labs(
+    title = "Victoria Electricity Demand",
+    subtitle = "Half-hourly demand data",
+    x = "Date and Time",
+    y = "Demand (Megawatts)"
+  ) +
+  theme_minimal()
+
+# Display all plots
+print(p1)
+print(p2)
+print(p3)
+print(p4)
+# 4.1 For a cleaner demand plot showing a shorter period:
+p4_zoom <- demand_ts %>%
+  filter_index("2014-01-01" ~ "2014-01-07") %>%  # First week of 2014
+  autoplot(Demand) +
+  labs(
+    title = "Victoria Electricity Demand - First Week of 2014",
+    x = "Date and Time",
+    y = "Demand (MW)",
+    caption = "Data shows half-hourly electricity demand"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 14),
+        axis.title = element_text(size = 11))
+
+print(p4_zoom)
+
+```
+
+**Key points about the intervals:**
+
+Bricks: [1Q] = Quarterly data (every 3 months)
+
+Lynx: [1Y] = Annual data (yearly measurements)
+
+Close: [!] = Irregular daily data (business days only, no
+weekends/holidays)
+
+Demand: [30m] = Half-hourly data (every 30 minutes)
+
+For the last plot (Demand), I've provided two versions:
+
+The full time series with modified axis labels and title as requested A
+zoomed-in version showing just one week to make patterns more visible
+The labs() function is used to modify the axis labels and title
+
+2.  Use filter() to find what days corresponded to the peak closing
+    price for each of the four stocks in gafa_stock
+
+```{r}
+head(gafa_stock)
+# Find days with peak closing price for each stock
+peak_days <- gafa_stock %>%
+  group_by(Symbol) %>%
+  filter(Close == max(Close, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(Symbol, Date, Close)
+
+# Display the result
+peak_days
+```
+
+3.  Download the file tute1.csv from the book website, open it in Excel
+    (or some other spreadsheet application), and rehead its contents.
+    You should find four columns of information. Columns B through D
+    each contain a quarterly series, labelled Sales, AdBudget and GDP.
+    Sales contains the quarterly sales for a small company over the
+    period 1981-2005. AdBudget is the advertising budget and GDP is the
+    gross domestic product. All series have been adjusted for inflation.
+
+<!-- -->
+
+a.  You can read the data into R with the following script:
+
+```{r}
+url <- "https://otexts.com/fpp3/extrafiles/tute1.csv"
+tute1 <- readr::read_csv(url)
+head(tute1)
+
+```
+
+b.  You can read the data into R with the following script:
+
+```{r}
+mytimeseries <- tute1 |>
+  mutate(Quarter = yearquarter(Quarter)) |>
+  as_tsibble(index = Quarter)
+
+```
+
+c.  Construct time series plots of each of the three series
+
+```{r}
+mytimeseries |>
+  pivot_longer(-Quarter) |>
+  ggplot(aes(x = Quarter, y = value, colour = name)) +
+  geom_line() +
+  facet_grid(name ~ ., scales = "free_y")
+
+```
+
+Check what happens when you don’t include facet_grid()
+
+```{r}
+mytimeseries |>
+  pivot_longer(-Quarter) |>
+  ggplot(aes(x = Quarter, y = value, colour = name)) +
+  geom_line() 
+```
+
+**Key difference:**
+
+-   **With facet_grid():** Each series gets its own panel with its own
+    y-axis scale (scales = "free_y")
+
+-   **Without facet_grid():** All series share the same panel and y-axis
+    scale
+
+4.  The USgas package contains data on the demand for natural gas in the
+    US.
+
+Install the USgas package.
+
+Create a tsibble from us_total with year as the index and state as the
+key.
+
+```{r}
+#install.packages("USgas")
+library(tsibble)
+library(USgas)
+
+# Create tsibble from us_total with year as index and state as key
+us_tsibble <- us_total %>%
+  as_tsibble(
+    key = state,      # Group by state
+    index = year,     # Time index is year
+    regular = TRUE    # Data is regular (yearly)
+  )
+
+# Check the structure
+us_tsibble
+glimpse(us_tsibble)
+```
+
+c\. Plot the annual natural gas consumption by state for the New England
+area (comprising the states of Maine, Vermont, New Hampshire,
+Massachusetts, Connecticut and Rhode Island).
+
+```{r}
+# Define New England states
+new_england_states <- c("Maine", "Vermont", "New Hampshire", 
+                        "Massachusetts", "Connecticut", "Rhode Island")
+
+# Filter for New England states and plot
+us_tsibble %>%
+  filter(state %in% new_england_states) %>%
+  ggplot(aes(x = year, y = y, group = state, color = state)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Annual Natural Gas Consumption in New England States",
+    subtitle = "1997-2020",
+    x = "Year",
+    y = "Natural Gas Consumption (MMcf)",
+    color = "State"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    axis.title = element_text(size = 12)
+  ) +
+  scale_x_continuous(breaks = seq(1997, 2020, by = 3))
+```
+
+*Graph shows Massachusetts has highest Natural Gas Consumption whereas
+Vermont has lowest Natural Gas Consumption in the list.*
+
+5.  Download tourism.xlsx from the book website and read it into R using
+    readxl::read_excel(). Create a tsibble which is identical to the
+    tourism tsibble from the tsibble package. Find what combination of
+    Region and Purpose had the maximum number of overnight trips on
+    average. Create a new tsibble which combines the Purposes and
+    Regions, and just has total trips by State.
+
+```{r}
+# Since we have fpp3, already have the tourism data
+
+library(dplyr)
+data("tourism")
+
+# Part 3: Find max average combination
+max_combo <- tourism %>%
+  as_tibble() %>%  # Work with regular tibble to avoid tsibble restrictions
+  group_by(Region, Purpose) %>%
+  summarise(avg_trips = mean(Trips), .groups = 'drop') %>%
+  slice_max(avg_trips, n = 1)
+
+print("Region-Purpose with maximum average trips:")
+print(max_combo)
+
+# Part 4: Create state-level tsibble
+tourism_state <- tourism %>%
+  as_tibble() %>%  # Convert to tibble to use regular group_by
+  group_by(State, Quarter) %>%
+  summarise(Total_Trips = sum(Trips), .groups = 'drop') %>%
+  mutate(Quarter = yearquarter(Quarter)) %>%  # Ensure proper format
+  as_tsibble(key = State, index = Quarter)
+
+print("\nState-level tourism tsibble:")
+print(tourism_state)
+```
+
+8.  Use the following graphics functions: autoplot(), gg_season(),
+    gg_subseries(), gg_lag(), ACF() and explore features from the
+    following time series: “Total Private” Employed from us_employment,
+    Bricks from aus_production, Hare from pelt, “H02” Cost from PBS, and
+    Barrels from us_gasoline.
+
+Can you spot any seasonality, cyclicity and trend? What do you learn
+about the series? What can you say about the seasonal patterns? Can you
+identify any unusual years?
+
+-   `gg_season()` = Same colored lines follow similar shape =
+    Seasonality
+
+-   `autoplot()` = Overall upward slope = Trend
+
+-   `autoplot()` + Recession dips = Cyclicity
+
+-   `ACF()` = Significant lags at 12, 24 months = Yearly seasonality
+
+-   `gg_lag()` = Strong correlation at lag 1 = Short-term dependence
+
+```{r}
+# 1. TOTAL PRIVATE EMPLOYMENT - Concise Analysis
+pe <- us_employment %>% filter(Title == "Total Private") %>% select(Month, Employed)
+
+# All plots in minimal code
+autoplot(pe, Employed) + ggtitle("Trend: Strong growth, recession dips")
+gg_season(pe, Employed) + ggtitle("Seasonality: Yearly hiring cycles")
+gg_subseries(pe, Employed) + ggtitle("Monthly patterns consistent")
+gg_lag(pe, Employed) + ggtitle("Strong autocorrelation")
+pe %>% ACF(Employed) %>% autoplot() + ggtitle("Cycles: Business cycle lags")
+```
+
+1.  "Total Private" Employment (us_employment)
+
+    **1.1 Seasonality:**  **Strong yearly pattern**
+
+    -   Clear seasonal peaks in December (holiday hiring) and summer
+        (temporary jobs)
+
+    -   Troughs in January-February (post-holiday layoffs)
+
+    1.  **2 Cyclicity:**  **Business cycles evident**
+
+    -   Recessions visible: 2001 dot-com bubble, 2008 financial crisis,
+        2020 COVID-19
+
+    -   Approximately 8-10 year cycles
+
+    **1.3 Trend:**  **Strong positive trend**
+
+    -   Consistent upward growth except during recessions
+
+    -   Recovery after each recession returns to trend line
+
+    **1.4 Unusual years:**
+
+    -   **2008-2009:** Sharpest employment drop in modern history
+
+    -   **2020:** COVID-19 pandemic caused unprecedented V-shaped drop
+        and recovery
+
+    -   **2001:** Smaller but notable dot-com recession impact
+
+What we learn: Employment follows predictable yearly hiring patterns but
+is highly sensitive to economic shocks. The consistent long-term growth
+shows overall economic expansion despite cyclical downturns.
+
+```{r}
+# 2. BRICKS PRODUCTION
+br <- aus_production %>% select(Quarter, Bricks)
+autoplot(br, Bricks) + ggtitle("Trend: Decline since 1970s")
+gg_season(br, Bricks) + ggtitle("Seasonality: Q3 peak, Q1 trough")
+gg_subseries(br, Bricks) + ggtitle("Quarterly consistency")
+gg_lag(br, Bricks) + ggtitle("Quarterly dependence")
+br %>% ACF(Bricks) %>% autoplot() + ggtitle("Cycles: Construction cycles")
+```
+
+### 2. Bricks Production time
+
+#### 2.1. Seasonality:  STRONG Quarterly Pattern
+
+What you see in gg_season():
+
+Q3 (July-Sept) = Highest - Peak building season Q4 (Oct-Dec) = High -
+Year-end completions Q1 (Jan-Mar) = Lowest - Holiday slowdown, weather
+Q2 (Apr-Jun) = Rising - Building season starts Pattern: Clear annual
+cycle with summer peak, winter trough
+
+#### 2.2. Trend:  DECLINING Long-term
+
+What you see in autoplot():
+
+Peaked \~1974 - Maximum production Steady decline since - Never returned
+to 1970s levels Structural break - Clear change point in mid-1970s 2.3.
+\#### Cyclicity: Economic Cycles Visible
+
+What you see in time plot:
+
+#### 2.4. Unusual Years:
+
+1970s boom - High volatility, peak production 1990s recession dip -
+Clear downturn 2000s fluctuations - Housing market cycles 2008 GFC
+impact - Production drop
+
+```{r}
+# 3. HARE POPULATION (Annual - skip seasonal plots)
+ha <- pelt %>% select(Year, Hare)
+autoplot(ha, Hare) + ggtitle("Trend: None, Cycle: Strong 10-year")
+gg_lag(ha, Hare) + ggtitle("Annual dependence")
+ha %>% ACF(Hare) %>% autoplot() + ggtitle("Perfect 10-year cycle")
+```
+
+#### 3.1. Seasonality: NONE (Annual Data)
+
+Only one observation per year Cannot assess within-year patterns
+
+#### 3.2. Trend: NO Clear Long-term Trend
+
+No consistent upward or downward direction
+
+#### 3.3. Cyclicity:  EXTREMELY STRONG 10-Year Cycle
+
+Clear peaks approximately every 10 years: 1855, 1865, 1875, 1885, 1895,
+etc. Regular troughs between peaks Classic predator-prey cycle with lynx
+(visible in combined data)
+
+#### 3.4. Unusual Years:
+
+Cycle extremes: Each peak and trough is "unusual" relative to average
+1915-1920: Exceptionally long/depressed period
+
+```{r}
+# 4. H02 COST (Aggregate first)
+h02 <- PBS %>% 
+  filter(ATC2 == "H02") %>%
+  as_tibble() %>%
+  group_by(Month) %>%
+  summarise(Cost = sum(Cost)) %>%
+  as_tsibble(index = Month)
+
+autoplot(h02, Cost) + ggtitle("Trend: Steady healthcare inflation")
+gg_season(h02, Cost) + ggtitle("Seasonality: Monthly insurance cycles")
+gg_subseries(h02, Cost) + ggtitle("Policy step changes visible")
+gg_lag(h02, Cost) + ggtitle("Monthly correlations")
+h02 %>% ACF(Cost) %>% autoplot() + ggtitle("Policy-driven patterns")
+```
+
+#### 4.1. Trend:  STRONG Upward
+
+Steady increase over entire period Accelerated growth in later years No
+decline at any point
+
+#### 4.2. Seasonality:  Monthly Pattern End-of-year peaks (Dec/Jan -
+
+insurance renewals) Mid-year dips Consistent shape across years
+
+#### 4.3. Cyclicity: POLICY Steps (Not Smooth Cycles) Step changes at
+
+specific dates Plateaus then jumps = Policy/price adjustments No regular
+economic cycles
+
+#### 4.4. Unusual: Policy Implementation Years 1995: Major change point 2005:
+
+Significant price jump 2012: Another structural shift
+
+```{r}
+# All plots with EXACT same title structure
+make_title <- function(series, analysis) {
+  paste(series, ":", analysis)
+}
+
+ga <- us_gasoline %>% select(Week, Barrels)
+
+autoplot(ga, Barrels) + 
+  ggtitle(make_title("Gasoline Barrels", "Time Series Trend"))
+
+gg_season(ga, Barrels, period = "year") + 
+  ggtitle(make_title("Gasoline Barrels", "Yearly Seasonal Pattern"))
+
+# Create custom weekly visualization
+ga %>%
+  mutate(Year = year(Week), WeekNum = week(Week)) %>%
+  filter(Year >= 2015) %>%  # Recent years
+  ggplot(aes(x = WeekNum, y = Barrels, color = as.factor(Year))) +
+  geom_line(alpha = 0.7) +
+  ggtitle(make_title("Gasoline Barrels", "Week-of-Year Patterns")) +
+  labs(color = "Year")
+
+gg_lag(ga, Barrels) + 
+  ggtitle(make_title("Gasoline Barrels", "Lag Correlation Analysis"))
+
+ga %>% 
+  ACF(Barrels, lag_max = 104) %>%  # 2 years of weekly lags
+  autoplot() + 
+  ggtitle(make_title("Gasoline Barrels", "Autocorrelation Function"))
+
+```
+
+#### 5.1. Trend:  COMPLEX Multi-phase, Peaked then declined
+
+#### 5.2. Seasonality:  MULTIPLE Strong Patterns Yearly: Summer highs
+
+(vacations), winter lows
+
+#### 5.3. Cyclicity:  Economic Demand Cycles 2008 crisis: Massive demand
+
+destruction Recovery phase: 2009-2014 Oil price impacts: Visible in
+volatility
+
+#### 5.4. Unusual:
+
+2020: Pandemic lock down unprecedented drop
+
+### What we learn:
+
+1.  Economic series follow business cycles + seasonality
+
+2.  Natural systems (hare) show perfect biological cycles
+
+3.  Policy affects healthcare costs in discrete jumps
+
+4.  Energy demand has complex multi-frequency patterns
