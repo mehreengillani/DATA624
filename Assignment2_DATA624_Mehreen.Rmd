@@ -1,0 +1,677 @@
+---
+title: "Assignment2_DATA624"
+author: "Mehreen Ali Gillani"
+date: "2026-02-12"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load required libraries
+library(tidyverse)
+library(tsibble)
+library(fpp3)
+```
+
+### 3.1 Consider the GDP information in global_economy. Plot the GDP per capita for each country over time. Which country has the highest GDP per capita? How has this changed over time?
+```{r}
+
+# Load the data
+data("global_economy")
+
+# Calculate GDP per capita
+global_economy <- global_economy %>%
+  mutate(GDP_per_capita = GDP / Population)
+
+# 1. Plot GDP per capita for each country over time
+gdp_per_capita_plot <- global_economy %>%
+  ggplot(aes(x = Year, y = GDP_per_capita, group = Country)) +
+  geom_line(alpha = 0.3) +
+  scale_y_log10(labels = scales::comma) +
+  labs(title = "GDP per Capita Over Time by Country",
+       x = "Year",
+       y = "GDP per Capita (log scale)",
+       caption = "Source: global_economy dataset") +
+  theme_minimal()
+
+print(gdp_per_capita_plot)
+
+# 2. Which country has the highest GDP per capita?
+highest_gdp_per_capita <- global_economy %>%
+  group_by(Country) %>%
+  summarise(max_GDP_per_capita = max(GDP_per_capita, na.rm = TRUE)) %>%
+  arrange(desc(max_GDP_per_capita)) %>%
+  slice(1:10)  # Top 10 countries
+
+print("Top 10 countries by maximum GDP per capita:")
+print(highest_gdp_per_capita)
+
+# 3. How has the highest GDP per capita changed over time?
+# Identify the country with the highest GDP per capita
+top_country <- highest_gdp_per_capita$Country[1]
+
+# Plot that specific country
+top_country_plot <- global_economy %>%
+  filter(Country == top_country) %>%
+  ggplot(aes(x = Year, y = GDP_per_capita)) +
+  geom_line(color = "red", size = 1) +
+  geom_point(color = "darkred", alpha = 0.5) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = paste("GDP per Capita Over Time:", top_country),
+       x = "Year",
+       y = "GDP per Capita") +
+  theme_minimal()
+
+print(top_country_plot)
+
+```
+
+
+####  3.2 For each of the following series, make a graph of the data. If transforming seems appropriate, do so and describe the effect.
+
+United States GDP from global_economy.
+Slaughter of Victorian “Bulls, bullocks and steers” in aus_livestock.
+Victorian Electricity Demand from vic_elec.
+Gas production from aus_production.
+
+
+```{r}
+# 1. United States GDP from global_economy
+data("global_economy")
+
+us_gdp <- global_economy %>%
+  filter(Country == "United States") %>%
+  select(Year, GDP)
+
+# Plot US GDP
+p1_raw <- us_gdp %>%
+  ggplot(aes(x = Year, y = GDP)) +
+  geom_line(color = "steelblue", size = 1) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title = "United States GDP (Raw)",
+       subtitle = "Clear exponential growth pattern",
+       x = "Year",
+       y = "GDP (billions USD)") +
+  theme_minimal()
+
+# Log transformation for US GDP
+p1_log <- us_gdp %>%
+  ggplot(aes(x = Year, y = GDP)) +
+  geom_line(color = "darkgreen", size = 1) +
+  scale_y_log10(labels = scales::comma) +
+  labs(title = "United States GDP (Log Scale)",
+       subtitle = "Linear trend indicates constant growth rate",
+       x = "Year",
+       y = "GDP (billions USD, log scale)") +
+  theme_minimal()
+
+print(p1_raw)
+print(p1_log)
+
+# 2. Slaughter of Victorian "Bulls, bullocks and steers" from aus_livestock
+data("aus_livestock")
+
+victoria_beef <- aus_livestock %>%
+  filter(State == "Victoria", 
+         Animal == "Bulls, bullocks and steers") %>%
+  select(Month, Count)
+
+# Plot raw data
+p2_raw <- victoria_beef %>%
+  ggplot(aes(x = Month, y = Count)) +
+  geom_line(color = "brown", size = 0.7) +
+  labs(title = "Victorian Beef Slaughter (Raw)",
+         subtitle = "Strong seasonality with potential variance changes",
+         x = "Year",
+         y = "Number of animals") +
+  theme_minimal()
+
+# Log transformation to stabilize variance
+p2_log <- victoria_beef %>%
+  ggplot(aes(x = Month, y = Count)) +
+  geom_line(color = "darkorange", size = 0.7) +
+  scale_y_log10() +
+  labs(title = "Victorian Beef Slaughter (Log Scale)",
+         subtitle = "More stable variance, seasonality still present",
+         x = "Year",
+         y = "Number of animals (log scale)") +
+  theme_minimal()
+
+# Seasonal plot to better visualize pattern
+p2_seasonal <- victoria_beef %>%
+  gg_season(Count, period = "year") +
+  labs(title = "Victorian Beef Slaughter - Seasonal Plot",
+       y = "Number of animals") +
+  theme_minimal()
+
+print(p2_raw)
+print(p2_log)
+print(p2_seasonal)
+
+# 3. Victorian Electricity Demand from vic_elec
+data("vic_elec")
+
+# Take a subset - first 7 days (336 half-hour periods)
+elec_subset <- vic_elec %>%
+  filter(Time <= min(Time) + days(7))
+
+# Plot raw data
+p3_raw <- elec_subset %>%
+  ggplot(aes(x = Time, y = Demand)) +
+  geom_line(color = "darkblue", size = 0.3) +
+  labs(title = "Victorian Electricity Demand (First Week)",
+       subtitle = "Daily seasonality visible",
+       x = "Time", 
+       y = "Demand (MW)") +
+  theme_minimal()
+
+# Log transformation
+p3_log <- elec_subset %>%
+  ggplot(aes(x = Time, y = Demand)) +
+  geom_line(color = "purple", size = 0.3) +
+  scale_y_log10() +
+  labs(title = "Victorian Electricity Demand (Log Scale, First Week)",
+       x = "Time", 
+       y = "Demand (MW, log scale)") +
+  theme_minimal()
+
+
+print(p3_raw)
+print(p3_log)
+
+
+# 4. Gas production from aus_production
+data("aus_production")
+
+gas <- aus_production %>%
+  select(Quarter, Gas)
+
+# Plot raw data
+p4_raw <- gas %>%
+  ggplot(aes(x = Quarter, y = Gas)) +
+  geom_line(color = "darkred", size = 0.8) +
+  labs(title = "Australian Gas Production (Raw)",
+       subtitle = "Exponential growth with seasonality, increasing variance",
+       x = "Year",
+       y = "Gas production (petajoules)") +
+  theme_minimal()
+
+# Log transformation
+p4_log <- gas %>%
+  ggplot(aes(x = Quarter, y = Gas)) +
+  geom_line(color = "forestgreen", size = 0.8) +
+  scale_y_log10() +
+  labs(title = "Australian Gas Production (Log Scale)",
+       subtitle = "Linear trend, stabilized variance, seasonal pattern clearer",
+       x = "Year",
+       y = "Gas production (petajoules, log scale)") +
+  theme_minimal()
+
+# Seasonal decomposition to examine components
+gas_tsibble <- gas %>%
+  mutate(Gas_log = log(Gas)) %>%
+  as_tsibble(index = Quarter)
+
+# Try to fit a seasonal decomposition model
+tryCatch({
+  gas_decomp <- gas_tsibble %>%
+    model(classical_decomposition(Gas_log, type = "additive")) %>%
+    components()
+  
+  p4_decomp <- autoplot(gas_decomp) +
+    labs(title = "Gas Production - Seasonal Decomposition (Log Scale)")
+  print(p4_decomp)
+}, error = function(e) {
+  print("Could not create decomposition - try STL instead:")
+  gas_stl <- gas_tsibble %>%
+    model(STL(Gas_log ~ season(window = "periodic"))) %>%
+    components()
+  p4_stl <- autoplot(gas_stl) +
+    labs(title = "Gas Production - STL Decomposition (Log Scale)")
+  print(p4_stl)
+})
+
+print(p4_raw)
+print(p4_log)
+
+```
+#### 3.3 Why is a Box-Cox transformation unhelpful for the canadian_gas data?
+
+```{r}
+canadian_gas %>%
+  autoplot(Volume) +
+  labs(title = "Canadian Gas Production",
+       subtitle = "Constant variance, stable seasonal amplitude")
+# Find optimal lambda for Canadian gas
+lambda_canadian <- canadian_gas %>%
+  features(Volume, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+# Apply Box-Cox transformation
+canadian_gas %>%
+  autoplot(box_cox(Volume, lambda_canadian)) +
+  labs(title = paste("Canadian Gas - Box-Cox Transformation (λ =", 
+                     round(lambda_canadian, 3), ")"),
+       y = "Box-Cox transformed Volume")
+
+# Compare with original
+library(patchwork)
+p1 <- canadian_gas %>% autoplot(Volume) + labs(title = "Original")
+p2 <- canadian_gas %>% autoplot(box_cox(Volume, lambda_canadian)) + 
+      labs(title = paste("Box-Cox (λ =", round(lambda_canadian, 3), ")"))
+p1 + p2
+```
+
+##### Looking at canadian_gas:
+
+* The series shows strong, stable seasonality with consistent amplitude throughout
+* There's no increasing or decreasing variance as the level changes
+* The seasonal pattern is additive, not multiplicative
+
+Box-Cox transformations are designed to stabilize variance when it changes with the level of the series (e.g., exponential growth, multiplicative seasonality). Since canadian_gas already has relatively constant variance, applying Box-Cox would:
+
+* Provide no benefit - variance is already stable
+* Complicate interpretation - changes the scale unnecessarily
+Potentially distort the clean additive pattern
+
+#### 3.4 What Box-Cox transformation would you select for your retail data (from Exercise 7 in Section 2.10)? 7. Monthly Australian retail data is provided in aus_retail. Select one of the time series as follows (but choose your own seed value):
+
+set.seed(12345678)
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+Explore your chosen retail time series using the following functions:
+
+autoplot(), gg_season(), gg_subseries(), gg_lag(),
+
+ACF() |> autoplot()
+
+Can you spot any seasonality, cyclicity and trend? What do you learn about the series?
+
+```{r}
+
+# Set seed and select random retail series
+set.seed(12345678)
+myseries <- aus_retail %>%
+  filter(`Series ID` == sample(aus_retail$`Series ID`, 1))
+
+# View the series
+myseries %>%
+  autoplot(Turnover) +
+  labs(title = "Selected Retail Series: Original")
+
+# Find optimal lambda using Guerrero's method
+lambda <- myseries %>%
+  features(Turnover, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+# Apply Box-Cox transformation
+myseries %>%
+  autoplot(box_cox(Turnover, lambda)) +
+  labs(title = paste("Box-Cox Transformed (λ =", round(lambda, 3), ")"),
+       y = "Box-Cox transformed Turnover")
+
+# Compare original vs transformed
+library(patchwork)
+p1 <- myseries %>% autoplot(Turnover) + labs(title = "Original")
+p2 <- myseries %>% autoplot(box_cox(Turnover, lambda)) + 
+      labs(title = paste("Box-Cox (λ =", round(lambda, 3), ")"))
+p1 + p2
+
+# View lambda value
+print(paste("Optimal lambda:", round(lambda, 3)))
+
+```
+lambda = 0.083 is close to 0 so log transformation is a good option
+```{r}
+# Use log transformation (simpler and interpretable)
+myseries %>%
+  autoplot(log(Turnover)) +
+  labs(title = "Australian Retail - Log Transformation",
+       y = "Log Turnover")
+
+# Or lets use the exact Box-Cox value
+myseries %>%
+  autoplot(box_cox(Turnover, 0.083)) +
+  labs(title = "Australian Retail - Box-Cox (λ = 0.083)",
+       y = "Box-Cox transformed Turnover")
+
+```
+#### 3.5 For the following series, find an appropriate Box-Cox transformation in order to stabilise the variance. Tobacco from aus_production, Economy class passengers between Melbourne and Sydney from ansett, and Pedestrian counts at Southern Cross Station from pedestrian.
+```{r}
+# 1. Tobacco from aus_production
+data("aus_production")
+
+tobacco <- aus_production %>%
+  select(Quarter, Tobacco)
+
+# Find optimal lambda
+lambda_tobacco <- tobacco %>%
+  features(Tobacco, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+# Visualize
+p1 <- tobacco %>%
+  autoplot(Tobacco) +
+  labs(title = "Tobacco Production: Original")
+
+p2 <- tobacco %>%
+  autoplot(box_cox(Tobacco, lambda_tobacco)) +
+  labs(title = paste("Tobacco: Box-Cox (λ =", round(lambda_tobacco, 3), ")"))
+
+# 2. Economy class passengers between Melbourne and Sydney from ansett
+data("ansett")
+
+melsydecon <- ansett %>%
+  filter(Airports == "MEL-SYD", Class == "Economy") %>%
+  select(Week, Passengers)
+
+# Find optimal lambda
+lambda_ansett <- melsydecon %>%
+  features(Passengers, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+# Visualize
+p3 <- melsydecon %>%
+  autoplot(Passengers) +
+  labs(title = "MEL-SYD Economy Passengers: Original")
+
+p4 <- melsydecon %>%
+  autoplot(box_cox(Passengers, lambda_ansett)) +
+  labs(title = paste("MEL-SYD: Box-Cox (λ =", round(lambda_ansett, 3), ")"))
+
+# 3. Pedestrian counts at Southern Cross Station from pedestrian
+data("pedestrian")
+
+southercross <- pedestrian %>%
+  filter(Sensor == "Southern Cross Station") %>%
+  select(Date_Time, Count)
+
+# Find optimal lambda
+lambda_ped <- southercross %>%
+  features(Count, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+# Visualize
+p5 <- southercross %>%
+  autoplot(Count) +
+  labs(title = "Southern Cross Pedestrians: Original")
+
+p6 <- southercross %>%
+  autoplot(box_cox(Count, lambda_ped)) +
+  labs(title = paste("Pedestrians: Box-Cox (λ =", round(lambda_ped, 3), ")"))
+
+# Display results
+print(paste("Tobacco lambda:", round(lambda_tobacco, 3)))
+print(paste("MEL-SYD Economy lambda:", round(lambda_ansett, 3)))
+print(paste("Southern Cross Pedestrian lambda:", round(lambda_ped, 3)))
+
+# Arrange plots
+library(patchwork)
+(p1 | p2) / (p3 | p4) / (p5 | p6)
+
+```
+**Tobacco (λ = 0.926)**
+
+Nearly 1.0 → Almost no transformation needed
+Variance is already relatively stable
+
+**MEL-SYD Economy Passengers (λ = 2)**
+
+λ = 2 → Square transformation (y²)
+graph shows zeros in the data, as the Guerrero method requires strictly positive values
+A practical approach would be adding a small constant before applying a log transformation (λ = 0)
+
+**Southern Cross Pedestrians (λ = -0.25)**
+Negative lambda → Reciprocal transformation
+Variance decreases as pedestrian counts increase
+for interpretability, a log transformation (λ = 0) would be sufficient and more practical
+
+```{r}
+# Ansett data - MEL-SYD Economy class
+ansett %>%
+  filter(Airports == "MEL-SYD", Class == "Economy") %>%
+  select(Week, Passengers) %>%
+  autoplot(Passengers) +
+  labs(title = "MEL-SYD Economy Passengers: Original",
+       subtitle = "Contains zero/negative values causing Guerrero failure")
+
+# Add constant and transform
+melsydecon <- ansett %>%
+  filter(Airports == "MEL-SYD", Class == "Economy") %>%
+  mutate(Passengers_adj = Passengers + 1)  # Add constant to handle zeros/negatives
+
+# Find optimal lambda on adjusted data
+lambda_adj <- melsydecon %>%
+  features(Passengers_adj, features = guerrero) %>%
+  pull(lambda_guerrero)
+
+# Before and after transformation
+p_before <- melsydecon %>%
+  autoplot(Passengers) +
+  labs(title = "MEL-SYD Economy Passengers: Original",
+       subtitle = "Raw data with zeros/negatives")
+
+p_after <- melsydecon %>%
+  autoplot(box_cox(Passengers_adj, lambda_adj)) +
+  labs(title = "MEL-SYD Economy Passengers: Transformed",
+       subtitle = paste("Box-Cox on (Passengers+1), lambda =", round(lambda_adj, 3)))
+
+p_before | p_after
+
+```
+
+####  3.7 Consider the last five years of the Gas data from aus_production.
+
+gas <- tail(aus_production, 5*4) |> select(Gas)
+Plot the time series. Can you identify seasonal fluctuations and/or a trend-cycle?
+Use classical_decomposition with type=multiplicative to calculate the trend-cycle and seasonal indices.
+Do the results support the graphical interpretation from part a?
+Compute and plot the seasonally adjusted data.
+Change one observation to be an outlier (e.g., add 300 to one observation), and recompute the seasonally adjusted data. What is the effect of the outlier?
+Does it make any difference if the outlier is near the end rather than in the middle of the time series?
+
+```{r}
+library(patchwork)
+
+# a) Last five years of Gas data - proper tsibble
+gas <- aus_production %>%
+  tail(5*4) %>%
+  select(Quarter, Gas) %>%
+  as_tsibble(index = Quarter)
+
+# Plot time series
+p1 <- gas %>%
+  autoplot(Gas) +
+  labs(title = "Australian Gas Production - Last 5 Years",
+       subtitle = "Clear seasonal pattern with upward trend",
+       y = "Gas production (petajoules)")
+print(p1)
+
+# b) Classical multiplicative decomposition  
+gas_decomp <- gas %>%
+  model(
+    classical_decomposition(Gas, type = "multiplicative")
+  ) %>%
+  components()
+
+# Plot decomposition components
+p2 <- autoplot(gas_decomp) +
+  labs(title = "Multiplicative Decomposition of Gas Production")
+print(p2)
+
+# c) Seasonally adjusted data
+gas_seas_adj <- gas_decomp %>%
+  mutate(season_adjusted = Gas / seasonal) %>%
+  as_tsibble(index = Quarter)  # Re-establish as tsibble
+
+p3 <- gas_seas_adj %>%
+  autoplot(season_adjusted, color = "steelblue", size = 0.8) +
+  geom_line(data = gas, aes(x = Quarter, y = Gas), 
+            color = "gray50", alpha = 0.5, inherit.aes = FALSE) +
+  labs(title = "Seasonally Adjusted Gas Production",
+       subtitle = "Gray line = original data, Blue line = seasonally adjusted",
+       y = "Gas production (petajoules)")
+print(p3)
+
+# d) Add outlier in middle
+gas_outlier_mid <- gas
+gas_outlier_mid$Gas[10] <- gas_outlier_mid$Gas[10] + 300
+
+gas_decomp_mid <- gas_outlier_mid %>%
+  model(classical_decomposition(Gas, type = "multiplicative")) %>%
+  components()
+
+gas_seas_adj_mid <- gas_decomp_mid %>%
+  mutate(season_adjusted = Gas / seasonal) %>%
+  as_tsibble(index = Quarter)  # Add this line
+
+p4 <- gas_seas_adj_mid %>%
+  autoplot(season_adjusted, color = "steelblue", size = 0.8) +
+  geom_line(data = gas_outlier_mid, aes(x = Quarter, y = Gas), 
+            color = "gray50", alpha = 0.5, inherit.aes = FALSE) +
+  labs(title = "Seasonally Adjusted with Outlier (Middle)",
+       subtitle = "Outlier at quarter 10",
+       y = "Gas production (petajoules)")
+print(p4)
+
+# e) Add outlier near end
+gas_outlier_end <- gas
+gas_outlier_end$Gas[19] <- gas_outlier_end$Gas[19] + 300
+
+gas_decomp_end <- gas_outlier_end %>%
+  model(classical_decomposition(Gas, type = "multiplicative")) %>%
+  components()
+
+gas_seas_adj_end <- gas_decomp_end %>%
+  mutate(season_adjusted = Gas / seasonal) %>%
+  as_tsibble(index = Quarter)  # Add this line
+
+p5 <- gas_seas_adj_end %>%
+  autoplot(season_adjusted, color = "steelblue", size = 0.9) +
+  geom_line(data = gas_outlier_end, aes(x = Quarter, y = Gas), 
+            color = "gray50", alpha = 0.6, inherit.aes = FALSE) +
+  labs(title = "Seasonally Adjusted with Outlier (Near End)",
+       subtitle = "Outlier at quarter 18",
+       y = "Gas production (petajoules)")
+print(p5)
+
+# Display all plots
+p1 / p2 / p3 / p4 / p5
+```
+
+**Key Findings:**
+a. Clear seasonal pattern with upward trend
+c. Multiplicative classical decomposition also shows upward trend and seasonality. In trend data is missing at the ends because of the moving averages.
+d. Outlier clearly reflects in seasonally adjusted data 
+e. Even when the outlier is near the end it reflects in seasonally adjusted graph.
+
+
+####  3.8 Recall your retail time series data (from Exercise 7 in Section 2.10). Decompose the series using X-11. Does it reveal any outliers, or unusual features that you had not noticed previously?
+7. Monthly Australian retail data is provided in aus_retail. Select one of the time series as follows (but choose your own seed value):
+
+set.seed(12345678)
+myseries <- aus_retail |>
+  filter(`Series ID` == sample(aus_retail$`Series ID`,1))
+Explore your chosen retail time series using the following functions:
+
+autoplot(), gg_season(), gg_subseries(), gg_lag(),
+
+ACF() |> autoplot()
+
+Can you spot any seasonality, cyclicity and trend? What do you learn about the series?
+```{r}
+#install.packages("seasonal")
+```
+
+```{r}
+library(seasonal)
+# Set seed and select random retail series
+set.seed(12345)
+myseries <- aus_retail %>%
+  filter(`Series ID` == sample(aus_retail$`Series ID`, 1))
+
+# View the series
+myseries %>%
+  autoplot(Turnover) +
+  labs(title = "Selected Retail Series: Original",
+       subtitle = paste("Series ID:", unique(myseries$`Series ID`),
+                        "-", unique(myseries$State),
+                        "-", unique(myseries$Industry)))
+
+# X-11 Decomposition
+myseries_x11 <- myseries %>%
+  model(X_13ARIMA_SEATS(Turnover ~ x11())) %>%
+  components()
+
+# Plot X-11 components
+autoplot(myseries_x11) +
+  labs(title = "X-11 Decomposition of Retail Turnover")
+
+# Focus on seasonal and irregular components to spot outliers/features
+myseries_x11 %>%
+  select(Month, seasonal, irregular) %>%
+  pivot_longer(c(seasonal, irregular), 
+               names_to = "component", 
+               values_to = "value") %>%
+  ggplot(aes(x = Month, y = value)) +
+  geom_line() +
+  facet_grid(component ~ ., scales = "free_y") +
+  labs(title = "X-11: Seasonal and Irregular Components",
+       subtitle = "Check for unusual patterns or outliers")
+
+# Highlight potential outliers in irregular component
+myseries_x11 %>%
+  autoplot(irregular) +
+  geom_hline(yintercept = c(-2, 2), color = "red", linetype = "dashed") +
+  labs(title = "X-11 Irregular Component",
+       subtitle = "Red lines at ±2 indicate potential outliers")
+
+# Identify specific outliers
+outliers <- myseries_x11 %>%
+  as_tibble() %>%
+  select(Month, irregular) %>%
+  filter(abs(irregular) > 2)  # Common threshold
+
+print("Potential outliers detected by X-11:")
+print(outliers)
+
+# Compare with original series
+myseries %>%
+  autoplot(Turnover) +
+  geom_vline(data = outliers, aes(xintercept = Month), 
+             color = "red", alpha = 0.5) +
+  labs(title = "Retail Series with Potential Outliers Highlighted",
+       subtitle = "Red lines indicate months with |irregular| > 2")
+
+```
+**X-11 Decomposition of Retail Time Series:**
+
+The X-11 decomposition did not reveal any statistically significant outliers (|irregular| > 2) in the selected retail series. This indicates that:
+
+**No unusual one-off events** - There were no unexpected spikes or drops beyond normal seasonal and trend variation
+**Stable seasonal pattern** - The seasonal component is consistent and well-captured by the decomposition
+**Smooth irregular component** - Random fluctuations are within expected ranges
+
+
+**Gradual seasonal shift** - The seasonal pattern shows slight evolution over time especially after 2007-2008, which is not obvious in the original plot
+**Trend-cycle smoothness** - The decomposition shows the underlying trend more clearly than the raw data, revealing steady growth with no abrupt structural breaks
+
+#### 3.9 Figures 3.19 and 3.20 show the result of decomposing the number of persons in the civilian labour force in Australia each month from February 1978 to August 1995.
+##### a. Write about 3–5 sentences describing the results of the decomposition. Pay particular attention to the scales of the graphs in making your interpretation.
+
+* The trend (scale ~4000-9000) shows a strong upward trajectory over the entire period, with a slight dip around 1991 that is barely visible at this scale but confirmed by increased variation in the original and remainder component 
+* The seasonal component (scale ±100) exhibits clear and stable monthly patterns, though there is a noticeable change in the seasonal amplitude and pattern after 1990—particularly visible in the later years of the seasonal sub-series plot.
+* The remainder (scale ±100) appears largely random with no obvious pattern, though slightly increased volatility around 1991 corresponds with the trend dip. 
+*  This is additive decomposition 
+
+##### b. Is the recession of 1991/1992 visible in the estimated components?
+
+Yes, the 1991/1992 recession is clearly visible in the components. 
+* The **trend component** shows a slight decline around 1991, interrupting the otherwise consistent upward growth. 
+* More noticeably, the **remainder component** exhibits increased volatility and a cluster of negative values during this period. 
+* The **seasonal sub-series** plot reveals that certain months—particularly **March, April, and August** show noticeably lower values after 1990 compared to their historical seasonal patterns, indicating the recession's disproportionate impact on specific times of the year. 
+
+This combination of trend stagnation, negative remainder spikes, and altered seasonal amplitudes makes the recession effects unmistakable in the decomposed components even though they were partially obscured in the original data.
