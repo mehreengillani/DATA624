@@ -1,0 +1,1382 @@
+---
+title: "Project1 data_624"
+author: "Mehreen Ali Gillani"
+Date: "2026-03-25"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    fig_width: 6
+    fig_height: 4
+    highlight: default
+    latex_engine: xelatex        # Better font support
+  html_document:
+    toc: true                    # Table of contents
+    toc_float: true              # Floating TOC
+    toc_depth: 3                 # Show headings down to level 3
+    number_sections: true        # Number sections
+    theme: flatly                # Better theme (flatly, cosmo, darkly)
+    highlight: tango             # Code highlighting
+    fig_width: 8                 # Figure width in inches
+    fig_height: 5                # Figure height in inches
+    fig_caption: true            # Figure captions
+    code_folding: show           # Show/hide code
+    df_print: paged              # Paginated data frames
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# import necessary libraries
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(tseries)
+library(knitr)
+library(scales)
+library(gridExtra)
+library(forecast)
+library(tsibble)
+library(fable)
+library(feasts)
+```
+
+
+**This project consists of 3 parts - two required and one bonus and is worth 15% of your grade. The project is due at 11:59 PM on Sunday March 29. I will accept late submissions with a penalty unti the meetup after that when we review some projects.** 
+
+# Part A
+
+**Part A – ATM Forecast, ATM624Data.xlsx In part A, I want you to forecast how much cash is taken out of 4 different ATM machines for May 2010. The data is given in a single file. The variable ‘Cash’ is provided in hundreds of dollars, other than that it is straight forward. I am being somewhat ambiguous on purpose to make this have a little more business feeling. Explain and demonstrate your process, techniques used and not used, and your actual forecast. I am giving you data via an excel file, please provide your written report on your findings, visuals, discussion and your R code via an RPubs link along with the actual.rmd file Also please submit the forecast which you will put in an Excel readable file.**
+
+## Data Loading & Exploration
+
+```{r}
+# Load data
+file_path <- "ATM624Data.xlsx"
+raw <- read_excel(file_path, sheet = "ATM Data")
+colnames(raw) <- c("Date", "ATM", "Cash")
+raw <- raw %>%
+  mutate(Date = as.Date(Date, origin = "1904-01-01"))
+
+glimpse(raw)
+```
+
+## Explore Date
+
+```{r}
+cat("Date range:", as.character(min(raw$Date, na.rm=TRUE)),
+    "to", as.character(max(raw$Date, na.rm=TRUE)), "\n")
+cat("Total rows:", nrow(raw), "\n")
+cat("ATMs:", paste(unique(na.omit(raw$ATM)), collapse=", "), "\n\n")
+
+# Summary stats
+raw %>%
+  filter(!is.na(ATM)) %>%
+  group_by(ATM) %>%
+  summarise(
+    N         = n(),
+    Mean      = round(mean(Cash, na.rm=TRUE), 1),
+    Median    = round(median(Cash, na.rm=TRUE), 1),
+    SD        = round(sd(Cash, na.rm=TRUE), 1),
+    Min       = round(min(Cash, na.rm=TRUE), 1),
+    Max       = round(max(Cash, na.rm=TRUE), 1),
+    `NAs`     = sum(is.na(Cash))
+  ) %>%
+  kable(caption = "Table 1: Summary Statistics by ATM (Cash in $00s)")
+```
+
+-   **ATM1** and **ATM2** are conventional machines with consistent
+    activity. ATM1 averages \~\$8,390/day; ATM2 \~\$6,260/day.
+-   **ATM3** has negligible average withdrawals (0.7 in \$00s = \$70),
+    with most days recording zero cash taken out, indicating it may be
+    rarely used or potentially out of service.
+-   **ATM4** shows an extreme maximum (\$1,091,976) and massive standard
+    deviation, suggesting at least one significant outlier.
+
+## Data Issues & Cleaning
+
+### Missing Values
+
+```{r missing-values}
+# Identify rows with NA ATM
+raw %>%
+  filter(!is.na(ATM), is.na(Cash)) %>%
+  select(ATM, Date) %>%
+  arrange(ATM, Date) %>%
+  print()
+```
+
+**ATM1:** Missing cash on June 14, 17, 23, 2013 **ATM2:** Missing cash
+on June 19, 25, 2013
+
+```{r}
+# Quick summary
+summary(raw$Date)
+range(raw$Date)
+```
+
+### Handle Missing value
+
+```{r}
+library(zoo)
+raw <- raw %>%
+  group_by(ATM) %>%           # 1. Process each ATM separately
+  arrange(Date) %>%           # 2. Sort by Date within each ATM
+  mutate(                      # 3. Create new column
+    Cash_filled = ifelse(      # 4. Conditional logic
+      is.na(Cash),             # 5. If Cash is missing...
+      na.approx(Cash, maxgap = 2, na.rm = FALSE),  # 6. ...interpolate
+      Cash                     # 7. ...otherwise keep original value
+    )
+  ) %>%
+  ungroup()  
+colSums(is.na(raw))
+```
+
+## Training data
+
+```{r}
+# Filter data up to May 2, 2014 (last known values)
+train_data <- raw %>%
+  filter(Date <= as.Date("2014-05-02"))  # Include May 2 as last training point
+
+# Forecast May 3-15, 2014 (13 days)
+forecast_Dates <- seq(as.Date("2014-05-03"), as.Date("2014-05-15"), by = "day")
+forecast_horizon <- length(forecast_Dates)  # 13 days
+
+# Check
+print(forecast_Dates)
+
+print(forecast_horizon)
+```
+
+### 1. Outlier ATM4
+
+```{r}
+atm4_data <- train_data %>%
+  filter(ATM == "ATM4") %>%
+  mutate(
+    Q1 = quantile(Cash, 0.25, na.rm = TRUE),
+    Q3 = quantile(Cash, 0.75, na.rm = TRUE),
+    IQR = Q3 - Q1,
+    is_outlier = Cash < (Q1 - 1.5 * IQR) | Cash > (Q3 + 1.5 * IQR)
+  )
+
+ggplot(atm4_data, aes(x = Date, y = Cash)) +
+  geom_line(color = "gray50") +
+  geom_point(aes(color = is_outlier), size = 2) +
+  scale_color_manual(values = c("black", "red"), 
+                     labels = c("Normal", "Outlier")) +
+  labs(title = "ATM4 Time Series with Outliers Highlighted",
+       x = "Date", y = "Cash ($00s)") +
+  theme_minimal()
+```
+
+```{r}
+# Count and summarize outliers
+atm4_data %>%
+  summarise(
+    Total_Observations = n(),
+    Outlier_Count = sum(is_outlier),
+    Outlier_Percentage = round(100 * mean(is_outlier), 2),
+    Min_Outlier = min(Cash[is_outlier]),
+    Max_Outlier = max(Cash[is_outlier])
+  )
+```
+
+### 2. Handling outliers
+
+```{r}
+# Winsorize ATM4 outliers to 99th percentile
+train_data_clean <- train_data %>%
+  group_by(ATM) %>%
+  mutate(
+    Cash = ifelse(ATM == "ATM4",
+                  {
+                    q99 <- quantile(Cash, 0.99, na.rm = TRUE)
+                    q01 <- quantile(Cash, 0.01, na.rm = TRUE)
+                    pmin(pmax(Cash, q01), q99)
+                  },
+                  Cash)
+  ) %>%
+  ungroup()
+
+# Verify outliers are handled
+train_data_clean %>%
+  filter(ATM == "ATM4") %>%
+  summarise(
+    Max = max(Cash),
+    Min = min(Cash),
+    Mean = mean(Cash)
+  )
+```
+
+**Why Winsorize?** Preserves data structure while reducing extreme
+outlier impact on forecasting models. The 3 outliers likely represent
+special events (holidays, machine issues) that won't repeat regularly
+
+**Summary:**
+
+-   **Extreme outliers removed:** Max reduced by 86% (from \$1,091,976
+    to \$148,810)
+
+-   **More realistic distribution:** Mean dropped from \$47,400 to
+    \$44,736
+
+-   **Preserved variation:** Still captures high withdrawal days but
+    within reasonable bounds
+
+    ### 3. Handling outliers for all ATMs
+
+```{r}
+# Check outliers for all ATMs
+train_data_clean %>%
+  group_by(ATM) %>%
+  summarise(
+    Q1 = quantile(Cash, 0.25, na.rm = TRUE),
+    Q3 = quantile(Cash, 0.75, na.rm = TRUE),
+    IQR = Q3 - Q1,
+    Lower_Bound = Q1 - 1.5 * IQR,
+    Upper_Bound = Q3 + 1.5 * IQR,
+    Min = min(Cash, na.rm = TRUE),
+    Max = max(Cash, na.rm = TRUE),
+    Outlier_Count = sum(Cash < Lower_Bound | Cash > Upper_Bound, na.rm = TRUE),
+    Outlier_Percentage = round(100 * Outlier_Count / n(), 2)
+  )
+
+```
+
+### Box_Cox forATM1
+
+```{r}
+library(forecast)
+train_data_final <- train_data_clean %>%
+  group_by(ATM) %>%
+  mutate(
+    Cash_transformed = ifelse(ATM == "ATM1", 
+                              BoxCox(Cash, lambda = BoxCox.lambda(Cash)),
+                              Cash)
+  ) %>%
+  ungroup()
+```
+
+**Box-Cox transformation was applied to stabilize variance and make the
+time series more normally distributed, which is a key assumption for
+many forecasting models like ARIMA. This transformation helps reduce the
+impact of the 51 outliers in ATM1 (13.97% of data) and improves forecast
+accuracy by making patterns more consistent and predictable.**
+
+```{r}
+# Remove row with missing ATM and interpolate NAs
+train_data_final <- train_data_final %>%
+  filter(!is.na(ATM)) %>%  # Remove the NA row
+  group_by(ATM) %>%
+  arrange(Date) %>%
+  mutate(Cash_transformed = na.approx(Cash_transformed, na.rm = FALSE)) %>%
+  ungroup()
+
+# Verify no NAs remain
+train_data_final %>%
+  filter(Date <= as.Date("2014-05-02")) %>%
+  group_by(ATM) %>%
+  summarise(
+    Total_Rows = n(),
+    NA_Count = sum(is.na(Cash_transformed)),
+    NA_Percentage = round(100 * NA_Count / n(), 2)
+  )
+```
+
+## Forecasting 
+
+### Forecasting for ATM1
+
+```{r atm1}
+# Prepare data without transformation issues
+forecast_results <- list()
+
+# ATM1 - Use simpler approach
+atm1_data <- train_data_final %>%
+  filter(ATM == "ATM1", Date <= as.Date("2014-05-02")) %>%
+  pull(Cash)  # Use original Cash, not transformed
+
+# Remove NAs
+atm1_data <- na.omit(atm1_data)
+
+# Create time series
+ts_atm1 <- ts(atm1_data, frequency = 7)
+
+# Fit ARIMA on original scale
+fit_atm1 <- auto.arima(ts_atm1, seasonal = TRUE)
+fc_atm1 <- forecast(fit_atm1, h = 13)
+
+# Compare ARIMA vs ETS for ATM1
+fit_ets_atm1 <- ets(ts_atm1)
+fit_arima_atm1 <- auto.arima(ts_atm1, seasonal = TRUE)
+
+# Use the better model
+if(AIC(fit_arima_atm1) < AIC(fit_ets_atm1)) {
+  best_fit <- fit_arima_atm1
+  best_name <- "ARIMA"
+} else {
+  best_fit <- fit_ets_atm1
+  best_name <- "ETS"
+}
+
+# Print the best model
+cat("\n========================================\n")
+cat("ATM1 Model Selection Results:\n")
+cat("========================================\n")
+cat("ETS AIC:", round(AIC(fit_ets_atm1), 2), "\n")
+cat("ARIMA AIC:", round(AIC(fit_arima_atm1), 2), "\n")
+cat("\n✓ Best model:", best_name, "\n")
+cat("AIC difference:", round(abs(AIC(fit_arima_atm1) - AIC(fit_ets_atm1)), 2), "\n")
+cat("========================================\n")
+
+fc_best <- forecast(best_fit, h = 13)
+```
+
+**Interpretation:**
+
+ARIMA is the superior model for ATM1 with an AIC that is 1,190 points
+lower than ETS. This large difference indicates ARIMA captures ATM1's
+underlying patterns (weekly seasonality, trends, and autocorrelation)
+much more effectively than exponential smoothing.
+
+-   ATM1's 51 outliers (13.97% of data)
+-   Weekly withdrawal patterns
+-   Day-to-day dependencies in cash usage
+
+### Forecasting for ATM2
+
+```{r atm2}
+# ATM2 - Compare ARIMA and ETS only
+atm2_data <- train_data_final %>%
+  filter(ATM == "ATM2", Date <= as.Date("2014-05-02")) %>%
+  pull(Cash) %>% na.omit()
+ts_atm2 <- ts(atm2_data, frequency = 7)
+
+# Method 1: ARIMA
+fit_arima_atm2 <- auto.arima(ts_atm2, seasonal = TRUE)
+
+# Method 2: ETS (Exponential Smoothing)
+fit_ets_atm2 <- ets(ts_atm2)
+
+# Compare models using AIC and accuracy
+cat("\n========================================\n")
+cat("ATM2 Model Comparison Results:\n")
+cat("========================================\n")
+
+# Calculate AIC
+cat("\n--- AIC Comparison (lower is better) ---\n")
+cat(sprintf("ARIMA AIC: %.2f\n", AIC(fit_arima_atm2)))
+cat(sprintf("ETS AIC:   %.2f\n", AIC(fit_ets_atm2)))
+
+# Calculate RMSE
+cat("\n--- Training Accuracy (lower is better) ---\n")
+rmse_arima <- sqrt(mean(residuals(fit_arima_atm2)^2))
+rmse_ets <- sqrt(mean(residuals(fit_ets_atm2)^2))
+cat(sprintf("ARIMA RMSE: %.2f\n", rmse_arima))
+cat(sprintf("ETS RMSE:   %.2f\n", rmse_ets))
+
+# Select best model based on AIC
+if(AIC(fit_arima_atm2) < AIC(fit_ets_atm2)) {
+  best_model <- fit_arima_atm2
+  best_name <- "ARIMA"
+  best_aic <- AIC(fit_arima_atm2)
+} else {
+  best_model <- fit_ets_atm2
+  best_name <- "ETS"
+  best_aic <- AIC(fit_ets_atm2)
+}
+
+cat("\n========================================\n")
+cat("✓ Best model for ATM2:", best_name, "\n")
+cat("  Best AIC:", round(best_aic, 2), "\n")
+cat("========================================\n")
+
+# Generate forecasts
+fc_arima <- forecast(fit_arima_atm2, h = 13)
+fc_ets <- forecast(fit_ets_atm2, h = 13)
+
+# Display forecast comparison
+cat("\n--- Forecast Comparison (May 3-15, 2014) ---\n")
+cat("Date       | ARIMA | ETS | Selected\n")
+cat("----------------------------------------\n")
+
+forecast_dates <- seq(as.Date("2014-05-03"), as.Date("2014-05-15"), by = "day")
+
+for(i in 1:13) {
+  cat(format(forecast_dates[i], "%Y-%m-%d"), "|")
+  cat(sprintf(" %5.1f |", fc_arima$mean[i]))
+  cat(sprintf(" %5.1f |", fc_ets$mean[i]))
+  
+  if(best_name == "ARIMA") {
+    cat(sprintf(" %5.1f", fc_arima$mean[i]))
+  } else {
+    cat(sprintf(" %5.1f", fc_ets$mean[i]))
+  }
+  cat("\n")
+}
+
+# Use the best model's forecast
+if(best_name == "ARIMA") {
+  fc_atm2 <- fc_arima
+} else {
+  fc_atm2 <- fc_ets
+}
+
+cat("\n========================================\n")
+cat("Final forecast using:", best_name, "\n")
+cat("========================================\n")
+
+# Summary of selected forecast
+summary_fc <- data.frame(
+  Date = forecast_dates,
+  Forecast_00s = round(fc_atm2$mean, 2),
+  Lower_80 = round(fc_atm2$lower[,1], 2),
+  Upper_80 = round(fc_atm2$upper[,1], 2)
+)
+print(summary_fc)
+
+cat("\nTotal forecast for May 3-15, 2014:", 
+    round(sum(fc_atm2$mean), 0), "($00s)\n")
+cat("Total in dollars: $", 
+    format(round(sum(fc_atm2$mean) * 100, 0), big.mark = ","), "\n")
+```
+
+**Why ARIMA Wins:**
+
+-   **Best fit:** Lowest AIC indicates ARIMA best captures ATM2's
+    underlying patterns
+
+-   **Most accurate:** Lowest RMSE on training data
+
+-   **Consistent forecasts:** Similar to other methods but with better
+    statistical properties
+
+-   **Handles weekly seasonality well:** Frequency = 7 days
+
+### Forecasting for ATM3
+
+```{r atm3}
+# ATM3 - Why simple mean is best for zero-inflated data
+atm3_data <- train_data_final %>%
+  filter(ATM == "ATM3", Date <= as.Date("2014-05-02")) %>%
+  pull(Cash)
+
+# Remove any NAs
+atm3_data <- na.omit(atm3_data)
+
+# Check distribution
+cat("ATM3 Data Distribution:\n")
+cat("Total days:", length(atm3_data), "\n")
+cat("Days with zero:", sum(atm3_data == 0), 
+    paste0("(", round(100 * sum(atm3_data == 0)/length(atm3_data), 1), "%)\n"))
+cat("Days with >0:", sum(atm3_data > 0), "\n")
+cat("Maximum value:", max(atm3_data), "\n\n")
+
+# Use historical mean (accounts for zeros and occasional spikes)
+atm3_mean <- mean(atm3_data, na.rm = TRUE)
+atm3_sd <- sd(atm3_data, na.rm = TRUE)
+
+cat("Historical mean:", round(atm3_mean, 2), "($00s)\n")
+cat("Historical SD:", round(atm3_sd, 2), "\n\n")
+
+# Simple mean forecast is most appropriate because:
+# 1. No seasonal pattern exists (only 1 non-zero day)
+# 2. ARIMA/ETS would overfit to noise
+# 3. Mean represents expected daily average including zeros
+
+atm3_forecast <- rep(atm3_mean, 13)
+
+# Confidence intervals using historical SD
+atm3_lower_80 <- pmax(atm3_mean - 1.28 * atm3_sd, 0)
+atm3_upper_80 <- atm3_mean + 1.28 * atm3_sd
+
+cat("13-Day Forecast:\n")
+cat("Total:", round(sum(atm3_forecast), 2), "($00s)\n")
+cat("Total in dollars: $", format(round(sum(atm3_forecast) * 100, 0), big.mark = ","), "\n")
+```
+
+**Result:**
+
+ATM3 forecast: \$910 total for May 3-15, 2014 This correctly reflects
+that ATM3 is rarely used
+
+**Why ARIMA and ETS are NOT Used for ATM3:**
+
+-   **Zero-Inflated Data**
+
+ATM3 has 99% zeros with occasional small spikes. The historical mean is
+only 0.7 (\$70 per day). ARIMA and ETS models are designed for
+continuous, non-zero data with patterns - they fail dramatically with
+this type of data.
+
+### Forecasting for ATM4
+
+```{r atm4}
+# ATM4 - Compare ARIMA and ETS
+atm4_data <- train_data_final %>%
+  filter(ATM == "ATM4", Date <= as.Date("2014-05-02")) %>%
+  pull(Cash) %>% na.omit()
+ts_atm4 <- ts(atm4_data, frequency = 7)
+
+# Method 1: ARIMA
+fit_arima_atm4 <- auto.arima(ts_atm4, seasonal = TRUE)
+
+# Method 2: ETS (Exponential Smoothing)
+fit_ets_atm4 <- ets(ts_atm4)
+
+# Compare models
+cat("\n========================================\n")
+cat("ATM4 Model Comparison Results:\n")
+cat("========================================\n")
+
+# Calculate AIC
+cat("\n--- AIC Comparison (lower is better) ---\n")
+cat(sprintf("ARIMA AIC: %.2f\n", AIC(fit_arima_atm4)))
+cat(sprintf("ETS AIC:   %.2f\n", AIC(fit_ets_atm4)))
+
+# Calculate RMSE
+cat("\n--- Training Accuracy (lower is better) ---\n")
+rmse_arima <- sqrt(mean(residuals(fit_arima_atm4)^2))
+rmse_ets <- sqrt(mean(residuals(fit_ets_atm4)^2))
+cat(sprintf("ARIMA RMSE: %.2f\n", rmse_arima))
+cat(sprintf("ETS RMSE:   %.2f\n", rmse_ets))
+
+# Select best model based on AIC
+if(AIC(fit_arima_atm4) < AIC(fit_ets_atm4)) {
+  best_model <- fit_arima_atm4
+  best_name <- "ARIMA"
+  best_aic <- AIC(fit_arima_atm4)
+} else {
+  best_model <- fit_ets_atm4
+  best_name <- "ETS"
+  best_aic <- AIC(fit_ets_atm4)
+}
+
+cat("\n========================================\n")
+cat("✓ Best model for ATM4:", best_name, "\n")
+cat("  Best AIC:", round(best_aic, 2), "\n")
+cat("========================================\n")
+
+# Generate forecasts
+fc_arima <- forecast(fit_arima_atm4, h = 13)
+fc_ets <- forecast(fit_ets_atm4, h = 13)
+
+# Display forecast comparison for first 5 days
+cat("\n--- Forecast Comparison (First 5 days) ---\n")
+cat("Date       | ARIMA | ETS | Selected\n")
+cat("----------------------------------------\n")
+
+forecast_dates <- seq(as.Date("2014-05-03"), as.Date("2014-05-15"), by = "day")
+
+for(i in 1:5) {
+  cat(format(forecast_dates[i], "%Y-%m-%d"), "|")
+  cat(sprintf(" %6.1f |", fc_arima$mean[i]))
+  cat(sprintf(" %6.1f |", fc_ets$mean[i]))
+  
+  if(best_name == "ARIMA") {
+    cat(sprintf(" %6.1f", fc_arima$mean[i]))
+  } else {
+    cat(sprintf(" %6.1f", fc_ets$mean[i]))
+  }
+  cat("\n")
+}
+
+# Use the best model's forecast
+if(best_name == "ARIMA") {
+  fc_atm4 <- fc_arima
+} else {
+  fc_atm4 <- fc_ets
+}
+
+cat("\n========================================\n")
+cat("Final forecast using:", best_name, "\n")
+cat("========================================\n")
+
+# Summary of selected forecast
+summary_fc <- data.frame(
+  Date = forecast_dates,
+  Forecast_00s = round(fc_atm4$mean, 2),
+  Lower_80 = round(fc_atm4$lower[,1], 2),
+  Upper_80 = round(fc_atm4$upper[,1], 2)
+)
+print(summary_fc)
+
+cat("\nTotal forecast for May 3-15, 2014:", 
+    round(sum(fc_atm4$mean), 0), "($00s)\n")
+cat("Total in dollars: $", 
+    format(round(sum(fc_atm4$mean) * 100, 0), big.mark = ","), "\n")
+```
+
+### ATM4 Forecast Results Summary
+
+-   ARIMA outperforms ETS with AIC of 5,311 vs 6,407 (1,096 point
+    difference), indicating significantly better model fit
+
+-   **Mixed accuracy metrics:** ARIMA has slightly higher RMSE (341.8 vs
+    330.1) but is preferred based on AIC which penalizes model
+    complexity **F**
+
+-   **orecast total:** \$540,190 for May 3-15, 2014 (13 days), averaging
+    \$41,553 per day
+
+-   **Daily pattern:** Forecast shows variability between \$330-\$505
+    (\$00s), reflecting ATM4's historical volatility **Wide confidence
+    intervals:** Lower bounds negative (capped at \$0 in actual
+    forecasts) and upper bounds up to \$949 (\$00s), indicating high
+    uncertainty due to extreme historical outliers
+
+-   **Model selection:** ARIMA chosen over ETS despite slightly higher
+    RMSE because it better balances fit with parsimony (fewer
+    parameters)
+
+## Combining and visualizing Results:
+
+```{r combine results}
+# Create forecast dataframe
+forecast_Dates <- seq(as.Date("2014-05-03"), as.Date("2014-05-15"), by = "day")
+
+all_forecasts_fixed <- bind_rows(
+  data.frame(Date = forecast_Dates, ATM = "ATM1", 
+             Forecast = as.numeric(fc_atm1$mean),
+             Lower_80 = as.numeric(fc_atm1$lower[,1]),
+             Upper_80 = as.numeric(fc_atm1$upper[,1])),
+  data.frame(Date = forecast_Dates, ATM = "ATM2",
+             Forecast = as.numeric(fc_atm2$mean),
+             Lower_80 = as.numeric(fc_atm2$lower[,1]),
+             Upper_80 = as.numeric(fc_atm2$upper[,1])),
+  # Create forecast dataframe for ATM3
+  data.frame(Date = forecast_Dates, ATM = "ATM3",
+             Forecast = atm3_forecast,
+             Lower_80 = rep(atm3_lower_80, 13),
+             Upper_80 = rep(atm3_upper_80, 13)),
+  data.frame(Date = forecast_Dates, ATM = "ATM4",
+             Forecast = as.numeric(fc_atm4$mean),
+             Lower_80 = as.numeric(fc_atm4$lower[,1]),
+             Upper_80 = as.numeric(fc_atm4$upper[,1]))
+)
+
+# Ensure non-negative
+all_forecasts_fixed <- all_forecasts_fixed %>%
+  mutate(across(c(Forecast, Lower_80, Upper_80), ~ pmax(., 0)))
+```
+
+
+```{r  atm-forecast-plots, fig.width=10, fig.height=6, out.width="100%"}
+# Plot forecasts
+for(atm in c("ATM1", "ATM2", "ATM3", "ATM4")) {
+  
+  # Historical data
+  hist_data <- train_data_final %>%
+    filter(ATM == atm, Date <= as.Date("2014-05-02")) %>%
+    select(Date, Cash)
+  
+  # Forecast data
+  fc_data <- all_forecasts_fixed %>% filter(ATM == atm)
+  
+  p <- ggplot() +
+    geom_line(data = tail(hist_data, 90), 
+              aes(x = Date, y = Cash), 
+              color = "black", linewidth = 0.8) +
+    geom_line(data = fc_data, 
+              aes(x = Date, y = Forecast), 
+              color = "blue", linewidth = 1.2) +
+    geom_ribbon(data = fc_data, 
+                aes(x = Date, ymin = Lower_80, ymax = Upper_80), 
+                fill = "blue", alpha = 0.2) +
+    labs(title = paste(atm, "- May 3-15, 2014 Cash Withdrawal Forecast"),
+         x = "Date", y = "Cash ($00s)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+      plot.margin = margin(1, 1, 1, 1, "cm")
+      ) # Add margins)
+  
+  print(p)
+}
+```
+
+
+```{r  summary}
+# Summary
+summary_fixed <- all_forecasts_fixed %>%
+  group_by(ATM) %>%
+  summarise(
+    Total_Forecast = sum(Forecast),
+    Average_Daily = mean(Forecast),
+    Max_Daily = max(Forecast),
+    Min_Daily = min(Forecast),
+    CI_Width_Avg = mean(Upper_80 - Lower_80)
+  ) %>%
+  mutate(Total_Dollars = Total_Forecast * 100)
+
+print(summary_fixed)
+
+# Total
+total_fixed <- sum(summary_fixed$Total_Dollars)
+cat("\nTotal forecasted cash: $", format(total_fixed, big.mark = ","), "\n")
+```
+
+## Discussion & Business Recommendations
+
+### Model Performance Summary
+
+-   ARIMA consistently outperformed ETS across ATM1, ATM2, and ATM4,
+    with AIC improvements of 1,190–1,600 points, confirming its
+    suitability for cash withdrawal forecasting with weekly seasonality
+-   ATM3 required a simple historical mean approach due to zero-inflated
+    data (99% zeros), where complex time series models would produce
+    unrealistic forecasts
+-   Forecast accuracy varied by ATM: ATM2 showed highest reliability
+    (RMSE 26.1), while ATM4 exhibited high volatility (RMSE 341.8) due
+    to extreme outliers up to \$1.1M
+
+### **Key Findings**
+
+-   Total forecasted cash for May 3-15, 2014: \$715,384
+-   ATM4 dominates withdrawals (76% of total), requiring focused cash
+    management
+-   ATM3 is underutilized (\$937 total), suggesting potential for
+    decommissioning
+
+### **Business Recommendations**
+
+1.  **Optimize cash replenishment schedules** using ARIMA forecasts for
+    ATM1, ATM2, and ATM4 to reduce idle cash and prevent shortages
+2.  **Review ATM4 usage patterns** - investigate causes of extreme
+    volatility (business district? special events?) and consider dynamic
+    replenishment
+3.  **Evaluate ATM3 viability** - assess if operational costs justify
+    continued service given minimal usage
+4.  **Implement regular forecast validation** - compare actual May 2014
+    withdrawals against forecasts to refine models
+5.  **Monitor confidence intervals**- use 80% prediction intervals for
+    operational planning, 95% for risk management
+
+# Part B 
+
+**Part B – Forecasting Power, ResidentialCustomerForecastLoad-624.xlsx.Part B consists of a simple dataset of residential power usage forJanuary 1998 until December 2013. Your assignment is to model these data and a monthly forecast for 2014. The data is given in a single file. The variable ‘KWH’ is power consumption in Kilowatt hours, the rest is straight forward. Add this to your existing files above.**
+
+## Load Dataset
+
+```{r}
+# Read the data
+file_path <- "ResidentialCustomerForecastLoad-624.xlsx"
+power_data <- read_excel(file_path)
+
+# Set column names
+colnames(power_data) <- c("Sequence", "Date", "KWH")
+
+# View structure
+glimpse(power_data)
+head(power_data)
+```
+
+### Extract Proper Date
+
+```{r}
+# Extract year and month from the "Date" column (e.g., "1998-Jan")
+power_data <- power_data %>%
+  mutate(
+    # Extract year
+    Year = as.numeric(substr(Date, 1, 4)),
+    # Extract month abbreviation
+    Month_Abbr = substr(Date, 6, 8),
+    # Convert month abbreviation to number
+    Month = match(Month_Abbr, month.abb),
+    # Create proper date (first day of each month)
+    Proper_Date = as.Date(paste(Year, Month, "01", sep = "-"))
+  ) %>%
+  filter(!is.na(KWH))  # Remove any NA values
+
+# Check results
+head(power_data[, c("Proper_Date", "Year", "Month", "KWH")])
+```
+
+## Date Range
+
+```{r}
+# Check date range
+cat("Date range:", min(power_data$Proper_Date), "to", max(power_data$Proper_Date), "\n")
+cat("Total observations:", nrow(power_data), "\n")
+
+# Check if all months are present
+power_data %>%
+  group_by(Year) %>%
+  summarise(Months = n_distinct(Month)) %>%
+  print()
+```
+
+## Create Time Series
+
+```{r}
+# Create monthly time series
+ts_power <- ts(power_data$KWH, 
+               start = c(1998, 1), 
+               frequency = 12)
+
+# Plot time series
+plot(ts_power, 
+     main = "Residential Power Usage (Jan 1998 - Dec 2013)",
+     xlab = "Year", 
+     ylab = "KWH (Kilowatt hours)",
+     col = "steelblue",
+     lwd = 2)
+```
+
+## Visualize Pattern
+
+```{r}
+# Method 4: Boxplots to show monthly distribution
+power_data %>%
+  mutate(Month = month(Proper_Date, label = TRUE)) %>%
+  ggplot(aes(x = Month, y = KWH)) +
+  geom_boxplot(fill = "steelblue", alpha = 0.6) +
+  labs(title = "Monthly Distribution of Power Usage",
+       x = "Month", 
+       y = "KWH") +
+  theme_minimal()
+```
+
+## Fit Models and Forecast
+
+```{r}
+# Fit ARIMA
+fit_arima <- auto.arima(ts_power, seasonal = TRUE)
+fc_arima <- forecast(fit_arima, h = 12)
+
+# Fit ETS
+fit_ets <- ets(ts_power)
+fc_ets <- forecast(fit_ets, h = 12)
+
+# Compare models
+cat("\n========================================\n")
+cat("Model Comparison:\n")
+cat("========================================\n")
+cat("ARIMA AIC:", round(AIC(fit_arima), 2), "\n")
+cat("ETS AIC:  ", round(AIC(fit_ets), 2), "\n")
+
+# Select best
+if(AIC(fit_arima) < AIC(fit_ets)) {
+  best_model <- fit_arima
+  best_name <- "ARIMA"
+} else {
+  best_model <- fit_ets
+  best_name <- "ETS"
+}
+cat("\n✓ Best model:", best_name, "\n")
+
+# Generate forecast
+forecast_2014 <- forecast(best_model, h = 12)
+
+```
+
+## Create 2014 Forecast Table
+
+```{r}
+# Create forecast dates
+forecast_months <- seq(as.Date("2014-01-01"), as.Date("2014-12-01"), by = "month")
+
+forecast_results <- data.frame(
+  Month = format(forecast_months, "%B %Y"),
+  Month_Abbr = month.abb,
+  Forecast_KWH = round(forecast_2014$mean, 0),
+  Lower_80 = round(forecast_2014$lower[,1], 0),
+  Upper_80 = round(forecast_2014$upper[,1], 0),
+  Lower_95 = round(forecast_2014$lower[,2], 0),
+  Upper_95 = round(forecast_2014$upper[,2], 0)
+)
+
+print(forecast_results)
+```
+
+## Visualize Forecast
+
+```{r}
+# Plot forecast
+autoplot(forecast_2014) +
+  labs(title = paste("Power Usage Forecast for 2014 (", best_name, " Model)", sep=""),
+       x = "Year", 
+       y = "KWH (Kilowatt hours)") +
+  theme_minimal()
+
+# Combined plot with recent history
+power_data_recent <- power_data %>%
+  filter(Proper_Date >= as.Date("2010-01-01"))
+
+forecast_plot_data <- data.frame(
+  Date = forecast_months,
+  KWH = forecast_2014$mean,
+  Type = "Forecast"
+)
+
+ggplot() +
+  geom_line(data = power_data_recent, 
+            aes(x = Proper_Date, y = KWH), 
+            color = "black", size = 0.8) +
+  geom_line(data = forecast_plot_data, 
+            aes(x = Date, y = KWH), 
+            color = "blue", size = 1.2) +
+  geom_ribbon(data = forecast_results, 
+              aes(x = forecast_months, 
+                  ymin = Lower_80, ymax = Upper_80), 
+              fill = "blue", alpha = 0.2) +
+  labs(title = "Power Usage Forecast for 2014",
+       x = "Date", 
+       y = "KWH") +
+  scale_x_date(date_breaks = "6 months", date_labels = "%b %Y") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Summary Statistics:
+
+```{r}
+# Summary
+summary_2014 <- forecast_results %>%
+  summarise(
+    Total_Annual = sum(Forecast_KWH),
+    Average_Monthly = mean(Forecast_KWH),
+    Peak_Month = Month[which.max(Forecast_KWH)],
+    Peak_Value = max(Forecast_KWH),
+    Lowest_Month = Month[which.min(Forecast_KWH)],
+    Lowest_Value = min(Forecast_KWH)
+  )
+
+cat("\n========================================\n")
+cat("2014 FORECAST SUMMARY\n")
+cat("========================================\n")
+cat("Total annual usage:", format(summary_2014$Total_Annual, big.mark = ","), "KWH\n")
+cat("Average monthly:", format(round(summary_2014$Average_Monthly, 0), big.mark = ","), "KWH\n")
+cat("Peak month:", summary_2014$Peak_Month, "with", 
+    format(summary_2014$Peak_Value, big.mark = ","), "KWH\n")
+cat("Lowest month:", summary_2014$Lowest_Month, "with",
+    format(summary_2014$Lowest_Value, big.mark = ","), "KWH\n")
+
+```
+
+## Residential Power Usage Forecast Results
+
+### **Model Performance**
+
+-   **ARIMA selected as best model (AIC: 5,455 vs ETS: 6,303)**,
+    confirming superior fit for monthly seasonal patterns 2014 Forecast
+    Summary
+
+-   **Total annual usage:** 91,313,308 KWH
+
+-   **Average monthly:** 7,609,442 KWH
+
+-   **Peak month:** January 2014 with 10,104,745 KWH (winter heating
+    demand)
+
+-   **Lowest month:** October 2014 with 5,860,807 KWH (fall moderate
+    weather)
+
+**Seasonal Pattern**
+
+-   **Winter peak:** January (10.1M KWH)
+
+-   **Summer peak:** August (9.7M KWH)
+
+-   **Spring/Fall troughs:** May (5.9M) and October (5.9M)
+
+### Business Recommendations
+
+Ensure capacity for January peak (10.1M KWH) - highest demand month
+Schedule maintenance in spring (April-May) during lowest usage periods
+Validate forecasts against actual 2014 consumption to refine models
+
+# Part C
+
+**Part C – BONUS, optional (part or all), Waterflow_Pipe1.xlsx and Waterflow_Pipe2.xlsx. Part C consists of two data sets. These are simple 2 columns sets, however they have different time stamps. Your optional assignment is to time-base sequence the data and aggregate based on hour (example of what this looks like, follows). Note for multiple recordings within an hour, take the mean. Then to determine if the data is stationary and can it be forecast. If so, provide a week forward forecast and present results via Rpubs and .rmd and the forecast in an Excel readable file.**
+
+## Load Datafiles:
+
+```{r}
+# Read both datasets
+pipe1 <- read_excel("Waterflow_Pipe1.xlsx")
+pipe2 <- read_excel("Waterflow_Pipe2.xlsx")
+
+# Check structure
+cat("===== PIPE 1 DATA =====\n")
+glimpse(pipe1)
+print(head(pipe1))
+
+cat("\n===== PIPE 2 DATA =====\n")
+glimpse(pipe2)
+print(head(pipe2))
+
+```
+
+## EDA
+
+```{r}
+# Rename columns if needed (assuming first column is timestamp, second is flow)
+colnames(pipe1) <- c("Timestamp", "Flow")
+colnames(pipe2) <- c("Timestamp", "Flow")
+
+# Convert Excel numeric dates to proper datetime
+# Excel origin for Windows: 1899-12-30
+pipe1$Timestamp <- as.POSIXct(pipe1$Timestamp * 86400, origin = "1899-12-30")
+pipe2$Timestamp <- as.POSIXct(pipe2$Timestamp * 86400, origin = "1899-12-30")
+
+# Check conversion
+cat("\n===== PIPE 1 CONVERTED TIMESTAMPS =====\n")
+print(head(pipe1))
+cat("\nDate range:", min(pipe1$Timestamp), "to", max(pipe1$Timestamp), "\n")
+
+cat("\n===== PIPE 2 CONVERTED TIMESTAMPS =====\n")
+print(head(pipe2))
+cat("\nDate range:", min(pipe2$Timestamp), "to", max(pipe2$Timestamp), "\n")
+```
+
+## Aggregate by Hour (Take Mean)
+
+```{r}
+# Aggregate Pipe1 by hour
+pipe1_hourly <- pipe1 %>%
+  mutate(
+    Hour = floor_date(Timestamp, unit = "hour")  # Round down to nearest hour
+  ) %>%
+  group_by(Hour) %>%
+  summarise(
+    Flow = mean(Flow, na.rm = TRUE),
+    Count = n(),  # Optional: track how many readings per hour
+    .groups = 'drop'
+  ) %>%
+  arrange(Hour)
+
+# Aggregate Pipe2 by hour
+pipe2_hourly <- pipe2 %>%
+  mutate(
+    Hour = floor_date(Timestamp, unit = "hour")
+  ) %>%
+  group_by(Hour) %>%
+  summarise(
+    Flow = mean(Flow, na.rm = TRUE),
+    Count = n(),
+    .groups = 'drop'
+  ) %>%
+  arrange(Hour)
+
+# Check results
+cat("===== PIPE 1 HOURLY AGGREGATION =====\n")
+print(head(pipe1_hourly))
+cat("\nTotal hourly records:", nrow(pipe1_hourly), "\n")
+cat("Hour range:", min(pipe1_hourly$Hour), "to", max(pipe1_hourly$Hour), "\n")
+
+cat("\n===== PIPE 2 HOURLY AGGREGATION =====\n")
+print(head(pipe2_hourly))
+cat("\nTotal hourly records:", nrow(pipe2_hourly), "\n")
+cat("Hour range:", min(pipe2_hourly$Hour), "to", max(pipe2_hourly$Hour), "\n")
+
+```
+
+## Combine Both Pipes
+
+```{r}
+# Combine Pipe1 and Pipe2 by hour
+combined_flow <- pipe1_hourly %>%
+  rename(Flow_Pipe1 = Flow, Count_Pipe1 = Count) %>%
+  full_join(pipe2_hourly %>% rename(Flow_Pipe2 = Flow, Count_Pipe2 = Count), by = "Hour") %>%
+  mutate(
+    # Fill NA with 0 for hours with no data from either pipe
+    Flow_Pipe1 = ifelse(is.na(Flow_Pipe1), 0, Flow_Pipe1),
+    Flow_Pipe2 = ifelse(is.na(Flow_Pipe2), 0, Flow_Pipe2),
+    Count_Pipe1 = ifelse(is.na(Count_Pipe1), 0, Count_Pipe1),
+    Count_Pipe2 = ifelse(is.na(Count_Pipe2), 0, Count_Pipe2),
+    Total_Flow = Flow_Pipe1 + Flow_Pipe2
+  ) %>%
+  arrange(Hour)
+
+# View combined results
+cat("===== COMBINED HOURLY FLOW =====\n")
+print(head(combined_flow, 10))
+cat("\nTotal hourly records:", nrow(combined_flow), "\n")
+cat("Date range:", min(combined_flow$Hour), "to", max(combined_flow$Hour), "\n")
+cat("Total flow range:", min(combined_flow$Total_Flow), "to", max(combined_flow$Total_Flow), "\n")
+```
+
+## Create Time Series and Visualize
+
+```{r}
+# Create time series object (hourly data with daily seasonality)
+ts_combined <- ts(combined_flow$Total_Flow, 
+                  frequency = 24)  # 24 hours in a day
+
+
+# plot with ggplot for better visualization
+ggplot(combined_flow, aes(x = Hour, y = Total_Flow)) +
+  geom_line(color = "darkgreen", size = 0.6) +
+  labs(title = "Combined Water Flow - Hourly Data",
+       x = "Date/Time", 
+       y = "Total Flow Rate") +
+  scale_x_datetime(date_breaks = "2 days", date_labels = "%b %d") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Test for stationarity
+
+```{r}
+# Create time series object
+ts_combined <- ts(combined_flow$Total_Flow, frequency = 24)
+
+# 1. Augmented Dickey-Fuller Test (ADF)
+# Null hypothesis: data is non-stationary
+adf_test <- adf.test(ts_combined, alternative = "stationary")
+
+cat("========================================\\n")
+cat("STATIONARITY TESTS\\n")
+cat("========================================\\n")
+
+cat("\\n1. Augmented Dickey-Fuller Test:\\n")
+cat(" p-value:", adf_test$p.value, "\\n")
+cat(" Conclusion:", ifelse(adf_test$p.value < 0.05,
+"Reject null - Data is STATIONARY",
+"Fail to reject null - Data is NON-STATIONARY"), "\\n")
+
+# 2. KPSS Test (Kwiatkowski-Phillips-Schmidt-Shin)
+# Null hypothesis: data is stationary
+kpss_test <- kpss.test(ts_combined)
+
+cat("\\n2. KPSS Test:\\n")
+cat(" p-value:", kpss_test$p.value, "\\n")
+cat(" Conclusion:", ifelse(kpss_test$p.value > 0.05,
+"Fail to reject null - Data is STATIONARY",
+"Reject null - Data is NON-STATIONARY"), "\\n")
+
+# 3. Visual inspection - ACF plot
+par(mfrow = c(1,1))
+acf(ts_combined, main = "Autocorrelation Function (ACF)")
+par(mfrow = c(1,1))
+
+# Final conclusion
+is_stationary <- (adf_test$p.value < 0.05) & (kpss_test$p.value > 0.05)
+cat("\\n========================================\\n")
+cat("FINAL CONCLUSION:\\n")
+cat("========================================\\n")
+cat("Data is", ifelse(is_stationary, "STATIONARY ✓", "NON-STATIONARY
+✗"), "\\n")
+cat("Can be forecast:", ifelse(is_stationary, "YES", "NO - needs
+differencing"), "\\n")
+```
+
+-   ADF says STATIONARY (p \< 0.05)
+-   KPSS says NON-STATIONARY (p \< 0.05)
+-   **Visual inspection:** ACF plot shows slow decay = non-stationary
+
+When tests conflict, we trust KPSS or conclude data needs differencing.
+Let's proceed.
+
+## Seasonal differencing
+
+```{r}
+# Apply seasonal differencing (lag = 24 for daily pattern)
+ts_diff <- diff(ts_combined, lag = 24)
+
+# Test if differencing made it stationary
+adf_diff <- adf.test(ts_diff, alternative = "stationary")
+kpss_diff <- kpss.test(ts_diff)
+
+cat("========================================\n")
+cat("AFTER SEASONAL DIFFERENCING (lag=24)\n")
+cat("========================================\n")
+cat("ADF p-value:", adf_diff$p.value, "\n")
+cat("KPSS p-value:", kpss_diff$p.value, "\n")
+
+is_stationary <- (adf_diff$p.value < 0.05) & (kpss_diff$p.value > 0.05)
+cat("\nData is now", ifelse(is_stationary, "STATIONARY ✓", "STILL NON-STATIONARY"), "\n")
+
+# Visualize differenced data
+par(mfrow = c(2,1))
+plot(ts_diff, main = "Differenced Flow (lag=24)", col = "blue")
+acf(ts_diff, main = "ACF of Differenced Data")
+par(mfrow = c(1,1))
+
+# Prepare data for forecasting
+forecast_data <- ts_diff
+cat("\n✓ Data ready for forecasting\n")
+
+```
+
+## Fit ARIMA Model and Forecast One Week
+
+```{r}
+ # Fit ARIMA model on stationary data
+fit_arima <- auto.arima(ts_diff, seasonal = FALSE)
+cat("========================================\n")
+cat("ARIMA MODEL SELECTION\n")
+cat("========================================\n")
+print(summary(fit_arima))
+
+# Generate forecast for 168 hours (7 days)
+forecast_hours <- 168
+fc <- forecast(fit_arima, h = forecast_hours)
+
+# Reverse the seasonal differencing to get actual forecasts
+# Get the last 24 original values to reconstruct
+last_original <- tail(ts_combined, 24)
+
+# Build back the forecasted values
+fc_mean <- numeric(forecast_hours)
+fc_lower_80 <- numeric(forecast_hours)
+fc_upper_80 <- numeric(forecast_hours)
+
+for(i in 1:forecast_hours) {
+  if(i <= 24) {
+    fc_mean[i] <- last_original[i] + fc$mean[i]
+    fc_lower_80[i] <- last_original[i] + fc$lower[i,1]
+    fc_upper_80[i] <- last_original[i] + fc$upper[i,1]
+  } else {
+    fc_mean[i] <- fc_mean[i-24] + fc$mean[i]
+    fc_lower_80[i] <- fc_lower_80[i-24] + fc$lower[i,1]
+    fc_upper_80[i] <- fc_upper_80[i-24] + fc$upper[i,1]
+  }
+}
+
+# Ensure non-negative
+fc_mean <- pmax(fc_mean, 0)
+fc_lower_80 <- pmax(fc_lower_80, 0)
+fc_upper_80 <- pmax(fc_upper_80, 0)
+
+# Create forecast timestamps
+forecast_start <- max(combined_flow$Hour) + hours(1)
+forecast_times <- seq(forecast_start, by = "hour", length.out = forecast_hours)
+
+# Create results dataframe
+forecast_results <- data.frame(
+  Hour = forecast_times,
+  Forecast_Flow = round(fc_mean, 2),
+  Lower_80 = round(fc_lower_80, 2),
+  Upper_80 = round(fc_upper_80, 2)
+)
+
+cat("\n========================================\n")
+cat("FORECAST RESULTS (First 24 hours)\n")
+cat("========================================\n")
+print(head(forecast_results, 24))
+
+```
+
+-   **Forecast horizon:** 168 hours = 7 days × 24 hours
+-   **Auto ARIMA:** Automatically selects best (p,d,q) parameters based
+    on AIC
+-   **ARIMA(3,0,3):** Chosen for this data - handles autocorrelation
+    well
+-   **AIC comparison:** Lower AIC indicates better model fit
+
+## Visualize the Forecast
+
+```{r}
+# Plot forecast with historical data
+ggplot() +
+  # Historical data (last 7 days)
+  geom_line(data = tail(combined_flow, 168), 
+            aes(x = Hour, y = Total_Flow), 
+            color = "black", size = 0.6) +
+  # Forecast
+  geom_line(data = forecast_results, 
+            aes(x = Hour, y = Forecast_Flow), 
+            color = "blue", size = 1) +
+  # Confidence interval
+  geom_ribbon(data = forecast_results, 
+              aes(x = Hour, ymin = Lower_80, ymax = Upper_80), 
+              fill = "blue", alpha = 0.2) +
+  # Vertical line separating historical from forecast
+  geom_vline(xintercept = max(combined_flow$Hour), 
+             linetype = "dashed", color = "red") +
+  labs(title = "Water Flow Forecast - Next 7 Days",
+       subtitle = "ARIMA(3,0,3) Model | 80% Confidence Intervals",
+       x = "Date/Time", 
+       y = "Total Flow Rate") +
+  scale_x_datetime(date_breaks = "1 day", date_labels = "%b %d") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Weekly Report
+
+```{r}
+# Summarize forecast by day
+forecast_summary <- forecast_results %>%
+  mutate(
+    Date = as.Date(Hour),
+    Hour_of_Day = hour(Hour)
+  ) %>%
+  group_by(Date) %>%
+  summarise(
+    Daily_Total = sum(Forecast_Flow),
+    Daily_Avg = mean(Forecast_Flow),
+    Peak_Hour = Hour_of_Day[which.max(Forecast_Flow)],
+    Peak_Flow = max(Forecast_Flow),
+    Min_Flow = min(Forecast_Flow),
+    .groups = 'drop'
+  )
+
+cat("\n========================================\n")
+cat("7-DAY FORECAST SUMMARY\n")
+cat("========================================\n")
+print(forecast_summary)
+
+cat("\n========================================\n")
+cat("TOTAL FORECAST\n")
+cat("========================================\n")
+cat("Total flow for next 7 days:", 
+    format(round(sum(forecast_results$Forecast_Flow), 0), big.mark = ","), "\n")
+cat("Average daily flow:", 
+    format(round(mean(forecast_summary$Daily_Total), 0), big.mark = ","), "\n")
+
+```
+
+**The water flow data is stationary after differencing and successfully
+forecast for one week forward.**
+
+## Key Observations from forecast:
+
+**Day 1 (Dec 3, 2015):**
+
+-   **Lower total flow:** 257 (only partial day from 12:00 onward)
+
+-   First forecast day starts at noon
+
+**Days 2-7 (Dec 4-9, 2015):**
+
+-   **Stable daily totals:** 1,060-1,065 per day
+-   **Consistent average:** \~44 per hour
+-   **Peak hour:** 2:00 AM consistently with 75-76 flow
+-   **Min flow:** 5-7 during low periods
+
+**Day 8 (Dec 10, 2015):**
+
+-   **Partial day** (ends at 11:00 AM)
+
+-   **Total:** 802 for first 11 hours
+
+-   **Stable forecast:** Days 2-7 show consistent \~1,060 daily total
+
+-   **Business insight:** Predictable patterns enable operational
+    planning
+
+**Real-World Business Value**
+
+-   **Operational planning:** Schedule maintenance during low-flow
+    periods
+-   **Resource allocation:** Predict daily totals for capacity planning
+-   **Risk management:** Use confidence intervals for buffer planning
+-   **Pattern recognition:** Identifies peak usage times (2:00 AM)
+
+This Project demonstrates the complete forecasting workflow from raw
+data → cleaning → aggregation → stationarity testing → transformation →
+model selection → forecasting → interpretation
+
+
+------------------------------------------------------------------
