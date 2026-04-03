@@ -1,0 +1,787 @@
+---
+title: "Homework 7 Data 624"
+author: "Mehreen Ali Gillani"
+date: "2026-04-03"
+output: 
+  html_document:
+    fig_caption: true
+    fig_retina: 2
+    fig_width: 7
+    fig_height: 5
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE,
+  message = FALSE,
+  echo = TRUE,
+  fig.align = "center")
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+```
+
+### Kuhn and Johnson do problems 6.2 and 6.3
+
+#### 6.2. Developing a model to predict permeability (see Sect.1.4) could save significant resources for a pharmaceutical company, while at the same time more rapidly identifying molecules that have a suﬃcient permeability to become a drug:
+
+**(a) Start R and use these commands to load the data:**
+
+> library(AppliedPredictiveModeling)
+
+> data(permeability)
+
+The matrix fingerprints contains the 1,107 binary molecular predic-
+tors for the 165 compounds, while permeability contains permeability
+response.
+
+```{r}
+# Load the package
+library(AppliedPredictiveModeling)
+
+# Load the data
+data(permeability)
+
+# Now check the structure of the data objects
+str(fingerprints)
+
+str(permeability)
+
+# Check dimensions
+dim(fingerprints)  
+length(permeability)
+
+head(permeability)
+```
+
+**(b) The fingerprint predictors indicate the presence or absence of sub-structures of a molecule and are often sparse meaning that relatively few of the molecules contain each substructure. Filter out the predictors that have low frequencies using the nearZeroVar function from the caret package. How many predictors are left for modeling?**
+
+```{r}
+library(caret)  # for nearZeroVar function
+# Check original number of predictors
+original_n <- ncol(fingerprints)
+print(paste("Original number of predictors:", original_n))
+
+# Identify near-zero variance predictors
+nzv_info <- nearZeroVar(fingerprints, saveMetrics = TRUE)
+
+# View the first few rows of the nzv information
+head(nzv_info)
+
+# Check which predictors are considered near-zero variance
+table(nzv_info$nzv)
+```
+
+```{r}
+# Get the column indices of predictors to remove
+nzv_cols <- nearZeroVar(fingerprints)
+
+# Create filtered dataset without near-zero variance predictors
+fingerprints_filtered <- fingerprints[, -nzv_cols]
+
+# Check how many predictors remain
+remaining_n <- ncol(fingerprints_filtered)
+print(paste("Number of predictors removed:", length(nzv_cols)))
+print(paste("Number of predictors remaining:", remaining_n))
+```
+
+**Why filter?** These 719 removed predictors have little variation (mostly all 0's or mostly all 1's), so they wouldn't contribute meaningful information to the model and could cause numerical instability.
+
+**(c) Split the data into a training and a test set, pre-process the data, and tune a PLS model. How many latent variables are optimal and what is the corresponding resampled estimate of R2?**
+
+```{r}
+library(pls)  # for PLS regression
+# Step 1: Filter out near-zero variance predictors (from part b)
+
+# Step 2: Split data into training (80%) and test (20%) sets
+set.seed(123)  # for reproducibility
+train_index <- createDataPartition(permeability, p = 0.8, list = FALSE)
+train_x <- fingerprints_filtered[train_index, ]
+train_y <- permeability[train_index]
+test_x <- fingerprints_filtered[-train_index, ]
+test_y <- permeability[-train_index]
+
+# Check dimensions
+print(paste("Training samples:", nrow(train_x)))
+print(paste("Test samples:", nrow(test_x)))
+
+# Step 3: Pre-process the data (center and scale)
+# For PLS, it's essential to center and scale predictors
+preProc <- preProcess(train_x, method = c("center", "scale"))
+train_x_processed <- predict(preProc, train_x)
+test_x_processed <- predict(preProc, test_x)
+
+# Step 4: Tune PLS model using cross-validation
+# Set up training control with 10-fold cross-validation
+ctrl <- trainControl(method = "cv", 
+                     number = 10, 
+                     verboseIter = FALSE)
+
+# Train PLS model with different numbers of latent variables
+# Typically test from 1 to 50 or up to min(nrow(train_x), ncol(train_x))
+max_components <- min(50, nrow(train_x) - 1, ncol(train_x))
+
+set.seed(456)
+pls_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "pls",
+  tuneLength = max_components,  # tests 1 to max_components
+  trControl = ctrl,
+  preProcess = NULL  # already pre-processed
+)
+
+# Step 5: Find optimal number of latent variables
+optimal_ncomp <- pls_model$bestTune$ncomp
+print(paste("Optimal number of latent variables:", optimal_ncomp))
+
+# Step 6: Get resampled R-squared estimate
+# This is the cross-validated R-squared from the tuning process
+resampled_R2 <- max(pls_model$results$Rsquared)
+print(paste("Resampled R-squared estimate:", round(resampled_R2, 4)))
+
+# View all results
+print(pls_model$results)
+
+# Plot results to see the pattern
+plot(pls_model, main = "PLS Model Performance")
+
+# Alternative: Get detailed cross-validation metrics
+print(summary(pls_model))
+
+```
+
+**Key observations from results:**
+
+1. Optimal Components (ncomp = 8)
+
+- The model selected 8 latent variables as optimal
+
+- R² peaks at 0.5765 with 8 components
+
+- After 8 components, R² starts declining (0.5671 at 9 components, 0.5444 at 10 components)
+
+2. Variance Explained
+
+**From the summary output:**
+With 8 components, the model explains:
+
+- 64.73% of variance in the predictors (X)
+- 79.85% of variance in the response (permeability)
+
+3. Cross-Validation Performance
+
+The 8-component model shows:
+RMSE = 11.445
+R² = 0.5765
+MAE = 8.709
+
+
+**After splitting the data into training (133 compounds) and test (32 compounds) sets, centering and scaling the predictors, and tuning a Partial Least Squares (PLS) model using 10-fold cross-validation, the optimal number of latent variables was 8. The corresponding resampled estimate of R² was 0.5765 (approximately 57.7%).**
+
+```{r}
+
+# Plot R² vs number of components
+results_df <- pls_model$results
+
+ggplot(results_df, aes(x = ncomp, y = Rsquared)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Rsquared - RsquaredSD, 
+                    ymax = Rsquared + RsquaredSD), 
+                alpha = 0.3) +
+  geom_vline(xintercept = optimal_ncomp, linetype = "dashed", color = "red") +
+  labs(title = "PLS Model Performance",
+       x = "Number of Latent Variables",
+       y = "Cross-Validated R²") +
+  theme_minimal() +
+  annotate("text", x = optimal_ncomp + 1, y = max(results_df$Rsquared), 
+           label = paste("Optimal =", optimal_ncomp), color = "red")
+
+```
+
+
+
+**(d) Predict the response for the test set. What is the test set estimate of R2?**
+
+```{r}
+# Evaluate on test set 
+test_predictions <- predict(pls_model, test_x_processed)
+test_R2 <- cor(test_predictions, test_y)^2
+print(paste("Test set R-squared:", round(test_R2, 4)))
+
+# Create a visual comparison
+par(mfrow = c(1, 2))
+
+# Plot 1: Predicted vs Actual
+plot(test_y, test_predictions, 
+     xlab = "Actual Permeability", 
+     ylab = "Predicted Permeability",
+     main = paste("PLS Predictions (8 components)\nTest R² =", round(test_R2, 3)),
+     pch = 19, col = "blue")
+abline(0, 1, col = "red", lwd = 2)
+abline(lm(test_predictions ~ test_y), col = "green", lty = 2)
+
+# Add correlation text
+text(min(test_y), max(test_predictions), 
+     adj = c(0, 1),
+     labels = paste("R² =", round(test_R2, 3)), 
+     cex = 0.9)
+
+# Plot 2: Residuals
+residuals <- test_y - test_predictions
+plot(test_predictions, residuals, 
+     xlab = "Predicted Permeability", 
+     ylab = "Residuals",
+     main = "Residual Plot",
+     pch = 19, col = "darkred")
+abline(h = 0, col = "blue", lwd = 2)
+
+# Add residual statistics
+text(max(test_predictions), max(residuals), 
+     adj = c(1, 1),
+     labels = paste("Mean residual:", round(mean(residuals), 3)), 
+     cex = 0.8)
+
+# Calculate prediction intervals (optional)
+residual_sd <- sd(residuals)
+print(paste("Residual standard deviation:", round(residual_sd, 4)))
+```
+
+**Test Set Performance (R² = 0.373):**
+
+- The model explains about 37.3% of the variance in unseen data
+- This is lower than the cross-validated R² (0.5765)
+- The drop indicates some overfitting, which is common with:
+    - Many predictors (388) relative to samples (133 training)
+    - Complex molecular fingerprint data
+    
+Using the optimal PLS model with 8 latent variables trained on the pre-processed training data (centered and scaled), predictions were made for the 32 compounds in the test set. The test set estimate of R² is 0.373 (95% confidence interval would depend on test set size). This indicates that the model explains approximately 37.3% of the variance in permeability for new, unseen molecules.
+
+
+**(e) Try building other models discussed in this chapter. Do any have better predictive performance?**
+```{r}
+library(glmnet)  # for ridge, lasso, elastic net
+
+# ---------- Model 1: Ridge Regression ----------
+set.seed(456)
+ridge_grid <- expand.grid(lambda = seq(0, 0.1, length = 20))
+ridge_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "ridge",
+  tuneGrid = ridge_grid,
+  trControl = ctrl,
+  preProcess = NULL
+)
+
+# ---------- Model 2: Lasso Regression ----------
+set.seed(456)
+lasso_grid <- expand.grid(alpha = 1, lambda = seq(0.001, 0.1, length = 20))
+lasso_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "glmnet",
+  tuneGrid = lasso_grid,
+  trControl = ctrl,
+  preProcess = NULL
+)
+
+# ---------- Model 3: Elastic Net ----------
+set.seed(456)
+en_grid <- expand.grid(
+  alpha = seq(0, 1, length = 10),
+  lambda = seq(0.001, 0.1, length = 10)
+)
+elastic_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "glmnet",
+  tuneGrid = en_grid,
+  trControl = ctrl,
+  preProcess = NULL
+)
+
+# ---------- Model 4: Principal Component Regression (PCR) ----------
+set.seed(456)
+pcr_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "pcr",
+  tuneLength = 20,
+  trControl = ctrl,
+  preProcess = NULL
+)
+
+# ---------- Compare all models on test set ----------
+# PLS model (from part c)
+set.seed(456)
+pls_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "pls",
+  tuneLength = 20,
+  trControl = ctrl,
+  preProcess = NULL
+)
+
+# Make predictions on test set
+pls_pred <- predict(pls_model, test_x_processed)
+ridge_pred <- predict(ridge_model, test_x_processed)
+lasso_pred <- predict(lasso_model, test_x_processed)
+elastic_pred <- predict(elastic_model, test_x_processed)
+pcr_pred <- predict(pcr_model, test_x_processed)
+
+# Calculate test R² for each model
+test_results <- data.frame(
+  Model = c("PLS", "Ridge", "Lasso", "Elastic Net", "PCR"),
+  R2 = c(
+    cor(pls_pred, test_y)^2,
+    cor(ridge_pred, test_y)^2,
+    cor(lasso_pred, test_y)^2,
+    cor(elastic_pred, test_y)^2,
+    cor(pcr_pred, test_y)^2
+  ),
+  RMSE = c(
+    sqrt(mean((test_y - pls_pred)^2)),
+    sqrt(mean((test_y - ridge_pred)^2)),
+    sqrt(mean((test_y - lasso_pred)^2)),
+    sqrt(mean((test_y - elastic_pred)^2)),
+    sqrt(mean((test_y - pcr_pred)^2))
+  )
+)
+
+# Sort by R² (best first)
+test_results <- test_results[order(-test_results$R2), ]
+print(test_results)
+
+# Visual comparison
+comparison_df <- data.frame(
+  Actual = rep(test_y, 5),
+  Predicted = c(pls_pred, ridge_pred, lasso_pred, elastic_pred, pcr_pred),
+  Model = rep(c("PLS", "Ridge", "Lasso", "Elastic Net", "PCR"), each = length(test_y))
+)
+
+ggplot(comparison_df, aes(x = Actual, y = Predicted, color = Model)) +
+  geom_point(alpha = 0.6) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  facet_wrap(~Model) +
+  labs(title = "Model Predictions vs Actual Values on Test Set") +
+  theme_minimal()
+```
+
+Yes, other models demonstrate better predictive performance than PLS. Based on test set R² values:
+
+- Lasso performed best with R² = 0.4211, improving upon PLS by approximately 13%
+
+- Ridge regression also outperformed PLS with R² = 0.4004
+
+-  PLS achieved R² = 0.3730 (from part d)
+
+- Elastic Net (R² = 0.3267) and PCR (R² = 0.2922) showed worse performance than PLS
+
+
+*The superior performance of Lasso is expected given the high-dimensional nature of this problem (388 predictors, 133 training samples). Lasso's L1 penalty performs implicit feature selection, identifying the most relevant molecular substructures for predicting permeability while shrinking irrelevant predictors to zero.*
+
+**(f) Would you recommend any of your models to replace the permeability laboratory experiment?**
+
+No, I would not recommend replacing the laboratory permeability experiment with any of these models.
+
+**Reasoning:**
+
+1. Insufficient Predictive Performance
+
+Even the best model (Lasso) achieves a test set R² of only 0.421, meaning it explains just 42.1% of the variance in permeability. This leaves approximately 58% of the variance unexplained, which is far too much uncertainty for pharmaceutical decision-making.
+
+2. High Stakes in Drug Development
+
+- False positives (predicting high permeability when actual is low) could waste millions of dollars on molecules that will ultimately fail
+- False negatives (predicting low permeability when actual is high) could cause promising drug candidates to be abandoned prematurely
+- Regulatory agencies require experimental evidence for drug approval
+
+3. Prediction Errors Are Substantial
+
+The RMSE values (11-13 units) represent typical prediction errors. Given the range of permeability values in the dataset, these errors are substantial enough to misclassify compounds.
+
+However, I would recommend using the **Lasso model as a screening tool** to prioritize compounds for laboratory testing. It could rapidly eliminate unlikely candidates from large virtual libraries, focusing experimental resources on the most promising 20-30% of molecules. This hybrid approach would save significant resources while maintaining the gold standard of experimental validation for final decisions. The model could also identify which molecular substructures influence permeability, guiding medicinal chemistry optimization efforts even before laboratory testing begins.
+
+**Complementing Experimental Design**
+
+- Identify structural features affecting permeability (via Lasso coefficients)
+- Guide medicinal chemistry optimization efforts
+- Generate hypotheses for further testing
+
+#### 6.3. A chemical manufacturing process for a pharmaceutical product was discussed in Sect.1.4. In this problem, the objective is to understand the relationship between biological measurements of the raw materials (predictors), 6.5 Computing 139 measurements of the manufacturing process (predictors), and the response of product yield. Biological predictors cannot be changed but can be used to assess the quality of the raw material before processing. On the other hand, manufacturing process predictors can be changed in the manufacturing pro- cess. Improving product yield by 1% will boost revenue by approximately one hundred thousand dollars per batch:
+
+
+**(a) Start R and use these commands to load the data:**
+
+
+> library(AppliedPredictiveModeling)
+
+> data(chemicalManufacturingProcess)
+
+
+```{r}
+# Load required packages
+library(AppliedPredictiveModeling)
+# Load the data
+data(ChemicalManufacturingProcess)
+
+
+# Check dimensions
+dim(ChemicalManufacturingProcess)
+
+
+```
+
+**(b) A small percentage of cells in the predictor set contain missing values. Use an imputation function to fill in these missing values (e.g., see Sect.3.8).**
+
+```{r}
+library(RANN)
+# Separate predictors and response
+yield <- ChemicalManufacturingProcess$Yield
+predictors <- ChemicalManufacturingProcess[, !names(ChemicalManufacturingProcess) %in% "Yield"]
+
+# Check original missing values
+cat("Original missing value summary:\n")
+cat("Total missing values:", sum(is.na(predictors)), "\n")
+cat("Rows with missing values:", sum(apply(is.na(predictors), 1, any)), "out of", nrow(predictors), "\n")
+cat("Columns with missing values:", sum(apply(is.na(predictors), 2, any)), "out of", ncol(predictors), "\n")
+
+# Which columns have missing values?
+missing_cols <- names(which(colSums(is.na(predictors)) > 0))
+cat("\nColumns with missing values:\n")
+print(missing_cols)
+
+# Show missing value counts per column
+missing_counts <- colSums(is.na(predictors))
+cat("\nMissing value counts:\n")
+print(missing_counts[missing_counts > 0])
+
+# Option 1: KNN Imputation (recommended by textbook Section 3.8)
+# This uses k-nearest neighbors to impute missing values
+set.seed(123)  # for reproducibility
+preProc_knn <- preProcess(predictors, method = "knnImpute", k = 5)
+predictors_imputed_knn <- predict(preProc_knn, predictors)
+
+# Verify imputation completed
+cat("\nAfter KNN imputation:\n")
+cat("Total missing values:", sum(is.na(predictors_imputed_knn)), "\n")
+
+# Option 2: Median Imputation (simpler alternative)
+preProc_median <- preProcess(predictors, method = "medianImpute")
+predictors_imputed_median <- predict(preProc_median, predictors)
+
+# Option 3: Bagged Tree Imputation (more sophisticated)
+set.seed(123)
+preProc_bag <- preProcess(predictors, method = "bagImpute")
+predictors_imputed_bag <- predict(preProc_bag, predictors)
+
+# Compare the imputation methods
+cat("\nComparing imputation methods (checking first few missing values):\n")
+
+# Find first missing value location for comparison
+for(col in missing_cols[1:min(3, length(missing_cols))]) {
+  missing_idx <- which(is.na(predictors[, col]))[1]
+  if(!is.na(missing_idx)) {
+    cat("\nColumn:", col, "Row:", missing_idx, "\n")
+    cat("  Original: NA\n")
+    cat("  KNN imputed:", predictors_imputed_knn[missing_idx, col], "\n")
+    cat("  Median imputed:", predictors_imputed_median[missing_idx, col], "\n")
+    cat("  Bag imputed:", predictors_imputed_bag[missing_idx, col], "\n")
+  }
+}
+
+```
+
+
+**Missing data pattern:**
+
+- 106 missing values total (about 1.06% of all cells)
+- 24 rows (manufacturing runs) have missing values
+- 28 out of 57 predictors have missing values
+- All missing values are in manufacturing process predictors (none in biological predictors)
+
+**Interesting finding:**
+
+- BiologicalMaterial01-12 have no missing values (complete data)
+- Missing values only occur in ManufacturingProcess variables
+This makes sense biologically - raw material measurements are always recorded, but some process measurements might be optional or occasionally missed
+
+**Imputation results show dramatic differences:**
+
+**For ManufacturingProcess01, Row 1:**
+
+- KNN: 0.215 (small value)
+
+- Median: 11.4 (much larger)
+
+- Bag: 10.50 (also large)
+
+The predictor set contained 106 missing values (approximately 1.06% of all cells) across 28 manufacturing process variables. Notably, all 12 biological material predictors had complete data with no missing values. Missing values were present in 24 of the 176 manufacturing runs (13.6% of runs).
+
+**Why KNN is Best for Data:**
+
+Preserves relationships between variables
+
+- KNN finds similar manufacturing runs and uses their values to impute
+- This maintains the correlation structure in your data
+- Critical for manufacturing processes where variables interact
+
+Using the preProcess function from the caret package with KNN imputation (k=5 nearest neighbors), all missing values were successfully imputed:
+```{r}
+# KNN Imputation (BEST METHOD)
+set.seed(123)  # for reproducibility
+preProc_knn <- preProcess(predictors, method = "knnImpute", k = 5)
+predictors_imputed <- predict(preProc_knn, predictors)
+```
+
+
+**(c) Split the data into a training and a test set, pre-process the data, and tune a model of your choice from this chapter. What is the optimal value of the performance metric?**
+
+```{r}
+# Step 1: Split data into training (80%) and test (20%) sets
+set.seed(456)  # Different seed for reproducibility
+train_index <- createDataPartition(yield, p = 0.8, list = FALSE)
+train_x <- predictors_imputed[train_index, ]
+train_y <- yield[train_index]
+test_x <- predictors_imputed[-train_index, ]
+test_y <- yield[-train_index]
+
+cat("Training samples:", nrow(train_x), "\n")
+cat("Test samples:", nrow(test_x), "\n")
+
+# Step 2: Pre-process the data (center and scale - important for LASSO)
+preProc_scale <- preProcess(train_x, method = c("center", "scale"))
+train_x_processed <- predict(preProc_scale, train_x)
+test_x_processed <- predict(preProc_scale, test_x)
+
+# Step 3: Set up cross-validation for tuning
+ctrl <- trainControl(method = "cv", 
+                     number = 10, 
+                     verboseIter = FALSE)
+
+# Step 4: Tune LASSO model (alpha = 1 for LASSO)
+set.seed(789)
+lasso_grid <- expand.grid(
+  alpha = 1,  # 1 = LASSO
+  lambda = seq(0.001, 0.1, length = 30)  # Test 30 different lambda values
+)
+
+lasso_model <- train(
+  x = train_x_processed,
+  y = train_y,
+  method = "glmnet",
+  tuneGrid = lasso_grid,
+  trControl = ctrl,
+  preProcess = NULL  # Already pre-processed
+)
+
+# Step 5: Find optimal performance metric
+optimal_lambda <- lasso_model$bestTune$lambda
+optimal_R2 <- max(lasso_model$results$Rsquared)
+optimal_RMSE <- lasso_model$results$RMSE[which.max(lasso_model$results$Rsquared)]
+
+cat("\nOptimal LASSO Model:\n")
+cat("  Lambda:", optimal_lambda, "\n")
+cat("  Cross-validated R²:", round(optimal_R2, 4), "\n")
+cat("  Cross-validated RMSE:", round(optimal_RMSE, 4), "\n")
+
+# Print lambda, Rsquared, and RMSE
+print(lasso_model$results[, c("lambda", "Rsquared", "RMSE")])
+
+# Plot tuning results
+plot(lasso_model, main = "LASSO Model Tuning")
+
+# Step 6: Evaluate on test set
+test_predictions <- predict(lasso_model, test_x_processed)
+test_R2 <- cor(test_predictions, test_y)^2
+test_RMSE <- sqrt(mean((test_y - test_predictions)^2))
+
+cat("\nTest Set Performance:\n")
+cat("  R²:", round(test_R2, 4), "\n")
+cat("  RMSE:", round(test_RMSE, 4), "\n")
+
+# Step 7: Visualize predictions vs actual
+par(mfrow = c(1, 2))
+plot(test_y, test_predictions, 
+     xlab = "Actual Yield", 
+     ylab = "Predicted Yield",
+     main = paste("LASSO Predictions\nTest R² =", round(test_R2, 3)),
+     pch = 19, col = "blue")
+abline(0, 1, col = "red", lwd = 2)
+
+# Residual plot
+residuals <- test_y - test_predictions
+plot(test_predictions, residuals,
+     xlab = "Predicted Yield",
+     ylab = "Residuals",
+     main = "Residual Plot",
+     pch = 19, col = "darkred")
+abline(h = 0, col = "blue", lwd = 2)
+```
+**Summary of Results:**
+
+The LASSO regression model was tuned using 10-fold cross-validation on the training set (n=144). \n
+The optimal regularization parameter was λ = 0.0761, achieving a cross-validated R² of 0.6178 (RMSE = 1.1949).
+
+
+**(d) Predict the response for the test set. What is the value of the performance metric and how does this compare with there sampled performance metric on the training set?**
+
+The test set achieved an R² of 0.6025 (RMSE = 1.1447), which is consistent with the cross-validated training performance of R² = 0.6178 (RMSE = 1.1949). The test set R² is only 0.0153 (approximately 2.5%) lower than the cross-validated estimate, and the test RMSE is actually slightly better (1.1447 vs 1.1949). This close agreement indicates that the LASSO model generalizes very well to unseen data with minimal overfitting. The small difference between resampled and test performance suggests that the 10-fold cross-validation provided an accurate estimate of model performance.
+
+**(e) Which predictors are most important in the model you have trained? Do either the biological or process predictors dominate the list?**
+
+```{r}
+# Extract coefficients from the LASSO model
+coef_matrix <- coef(lasso_model$finalModel, s = lasso_model$bestTune$lambda)
+
+# Convert to matrix and remove intercept
+coef_vector <- as.matrix(coef_matrix)[-1, 1]  # Remove intercept
+
+# Get non-zero coefficients (important predictors)
+important_vars <- coef_vector[coef_vector != 0]
+important_df <- data.frame(
+  Predictor = names(important_vars),
+  Coefficient = important_vars,
+  Abs_Coefficient = abs(important_vars)
+)
+
+# Sort by absolute coefficient magnitude (most important first)
+important_df <- important_df[order(-important_df$Abs_Coefficient), ]
+
+# Display results
+cat("Number of predictors with non-zero coefficients:", length(important_vars), "\n")
+cat("Total predictors in model:", length(coef_vector), "\n")
+cat("Percentage selected:", round(100 * length(important_vars) / length(coef_vector), 1), "%\n\n")
+
+cat("Top 15 most important predictors:\n")
+print(head(important_df, 15))
+
+# Separate biological and process predictors
+biological_vars <- important_df[grep("BiologicalMaterial", important_df$Predictor), ]
+process_vars <- important_df[grep("ManufacturingProcess", important_df$Predictor), ]
+
+cat("\n--- Summary by Predictor Type ---\n")
+cat("Biological predictors selected:", nrow(biological_vars), "out of 12\n")
+cat("Process predictors selected:", nrow(process_vars), "out of 45\n")
+
+# Calculate total importance (sum of absolute coefficients)
+bio_importance <- sum(abs(biological_vars$Coefficient))
+process_importance <- sum(abs(process_vars$Coefficient))
+total_importance <- bio_importance + process_importance
+
+cat("\n--- Relative Importance ---\n")
+cat("Biological predictors importance:", round(100 * bio_importance / total_importance, 1), "%\n")
+cat("Process predictors importance:", round(100 * process_importance / total_importance, 1), "%\n")
+
+
+# Plot top 15 predictors
+top15 <- head(important_df, 15)
+ggplot(top15, aes(x = reorder(Predictor, Coefficient), y = Coefficient, fill = Coefficient > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Top 15 Most Important Predictors (LASSO Model)",
+       x = "Predictor", y = "Coefficient (Impact on Yield)") +
+  theme_minimal() +
+  scale_fill_manual(values = c("red", "blue"), 
+                    labels = c("Negative Impact", "Positive Impact"),
+                    name = "Effect on Yield")
+
+# Compare biological vs process predictor importance
+importance_comparison <- data.frame(
+  Type = c("Biological", "Process"),
+  Count = c(nrow(biological_vars), nrow(process_vars)),
+  Importance = c(bio_importance, process_importance)
+)
+
+# Plot comparison
+p1 <- ggplot(importance_comparison, aes(x = Type, y = Count, fill = Type)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Predictors Selected", y = "Count") +
+  theme_minimal()
+
+p2 <- ggplot(importance_comparison, aes(x = Type, y = Importance, fill = Type)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Total Importance (Sum of |Coefficients|)", y = "Absolute Coefficient Sum") +
+  theme_minimal()
+
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+**Summary:**
+
+The LASSO model selected 20 out of 57 total predictors (35.1%), with process predictors dominating the list. The most important predictor by far is ManufacturingProcess32 (coefficient = 0.995), followed by ManufacturingProcess09 (0.534) and ManufacturingProcess17 (-0.253).
+
+**1. Process predictors dominate with:**
+
+- 16 out of 20 selected predictors (80%) being process variables
+- 92.7% of total importance (sum of absolute coefficients)
+
+**2.  Biological predictors play a minor role:**
+
+- Only 4 out of 12 biological variables selected
+- Just 7.3% of total importance
+
+
+**Key Finding:** The strong dominance of controllable process predictors is excellent news for manufacturing optimization. The top positive coefficients (ManufacturingProcess32, ManufacturingProcess09, ManufacturingProcess39) identify parameters that should be increased to improve yield, while negative coefficients (ManufacturingProcess17, ManufacturingProcess07) indicate parameters that should be decreased.
+
+**(f) Explore the relationships between each of the top predictors and the response. How could this information be helpful in improving yield in future runs of the manufacturing process?**
+
+```{r}
+# Explore relationships between top predictors and yield
+top_predictors <- important_df$Predictor[1:5]
+
+# Create scatter plots
+plot_list <- list()
+for(i in 1:length(top_predictors)) {
+  predictor_values <- predictors_imputed[[top_predictors[i]]]
+  plot_list[[i]] <- ggplot(data.frame(x = predictor_values, y = yield), 
+                           aes(x = x, y = y)) +
+    geom_point(alpha = 0.6, color = "steelblue") +
+    geom_smooth(method = "lm", se = TRUE, color = "red") +
+    labs(title = top_predictors[i], x = top_predictors[i], y = "Yield (%)") +
+    theme_minimal()
+}
+grid.arrange(grobs = plot_list, ncol = 2, nrow = 3)
+
+# Summary statistics for top predictors
+cat("\n========== RELATIONSHIP SUMMARY ==========\n")
+for(i in 1:length(top_predictors)) {
+  predictor_values <- predictors_imputed[[top_predictors[i]]]
+  lm_model <- lm(yield ~ predictor_values)
+  coef_val <- coef(lm_model)[2]
+  p_val <- summary(lm_model)$coefficients[2, 4]
+  r2 <- summary(lm_model)$r.squared
+  
+  cat(sprintf("\n%s: coef = %.3f, R² = %.3f, p = %.4f %s", 
+              top_predictors[i], coef_val, r2, p_val, 
+              if(p_val < 0.05) "(SIGNIFICANT)" else ""))
+  cat(sprintf("\n  → %s this variable to improve yield", 
+              ifelse(coef_val > 0, "INCREASE", "DECREASE")))
+}
+```
+
+**Result Summary**
+
+Statistically significant predictors (p < 0.05):
+
+- ManufacturingProcess32 has the strongest positive relationship (R² = 37.0%). Increasing this variable will likely produce the largest yield gains.
+
+- ManufacturingProcess09 shows a moderate positive relationship (R² = 25.3%). Increasing this variable also improves yield.
+
+- ManufacturingProcess17 exhibits a negative relationship (R² = 18.1%). Decreasing this variable increases yield.
+
+**Actionable recommendations:**
+
+- Primary focus: Increase ManufacturingProcess32 (largest impact)
+
+- Secondary focus: Increase ManufacturingProcess09 and decrease ManufacturingProcess17
+
+- Ignore: Process39 and Process07 (not statistically significant)
+
+- Expected outcome: Focusing on the three significant predictors (Process32, Process09, Process17) provides a clear, data-driven path to optimize the manufacturing process and improve yield in future runs.
+
+
+---------------------------------------------
+
