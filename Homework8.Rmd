@@ -1,0 +1,642 @@
+---
+title: "Homework 8 Non-Linear models - Data 624"
+author: "Mehreen Ali Gillani"
+date: "2026-04-20"
+output:
+  pdf_document: default
+  html_document:
+    code_folding: hide
+    theme: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.width = 8, 
+                      fig.height = 6, 
+                      fig.align = "center",
+                      warning = FALSE,
+                      message = FALSE)
+# Load required libraries
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(mlbench)
+library(caret)
+library(earth)
+library(randomForest)
+library(kernlab)
+```
+
+*Do problems 7.2 and 7.5 in Kuhn and Johnson. There are only two but they have many parts. Please submit both a link to your Rpubs and the .rmd file.*
+
+#### 7.2. Friedman (1991) introduced several benchmark data sets create by simulation. One of these simulations used the following nonlinear equation to create data:
+
+y = 10sin(πx1x2)+20(x3−0.5)2 +10x4 +5x5 +N(0,σ2)
+
+where the x values are random variables uniformly distributed between [0, 1] (there are also 5 other non-informative variables also created in
+the simula tion). The package mlbench contains a function called mlbench.
+
+postResample(pred = knnPred, obs = testData$y) RMSE Rsquared 3.2286834
+0.6871735 Which models appear to give the best performance? Does MARS
+select the informative predictors (those named X1–X5)?
+
+```{r}
+
+# Set seed for reproducibility
+set.seed(200)
+
+# Generate training data
+trainingData <- mlbench.friedman1(200, sd = 1)
+trainingData$x <- data.frame(trainingData$x)
+
+# Generate test data
+testData <- mlbench.friedman1(5000, sd = 1)
+testData$x <- data.frame(testData$x)
+
+# Define train control (use repeated CV for stability)
+ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+# 1. kNN (already shown, but rerun for consistency)
+knnModel <- train(x = trainingData$x, y = trainingData$y,
+                  method = "knn",
+                  preProc = c("center", "scale"),
+                  tuneLength = 10,
+                  trControl = ctrl)
+
+# 2. MARS
+marsModel <- train(x = trainingData$x, y = trainingData$y,
+                   method = "earth",
+                   tuneLength = 10,
+                   trControl = ctrl)
+
+# 3. Random Forest
+rfModel <- train(x = trainingData$x, y = trainingData$y,
+                 method = "rf",
+                 tuneLength = 5,
+                 trControl = ctrl)
+
+# 4. SVM Radial
+svmModel <- train(x = trainingData$x, y = trainingData$y,
+                  method = "svmRadial",
+                  preProc = c("center", "scale"),
+                  tuneLength = 10,
+                  trControl = ctrl)
+
+# 5. Neural Network
+nnetModel <- train(x = trainingData$x, y = trainingData$y,
+                   method = "nnet",
+                   preProc = c("center", "scale"),
+                   tuneLength = 5,
+                   trace = FALSE,
+                   trControl = ctrl)
+
+# Collect models
+models <- list(kNN = knnModel, MARS = marsModel, RF = rfModel,
+               SVM = svmModel, NNET = nnetModel)
+
+# Compare resampling results
+resamp_results <- resamples(models)
+summary(resamp_results)
+
+# Test set evaluation
+test_results <- data.frame(Model = character(),
+                           RMSE = numeric(),
+                           Rsquared = numeric())
+
+for (name in names(models)) {
+  pred <- predict(models[[name]], newdata = testData$x)
+  perf <- postResample(pred = pred, obs = testData$y)
+  test_results <- rbind(test_results, data.frame(Model = name,
+                                                 RMSE = perf[1],
+                                                 Rsquared = perf[2]))
+}
+
+print(test_results)
+```
+
+**Best model: MARS**
+
+- RMSE = 1.81 (much lower than others)
+
+- R² = 0.87 (explains 87% of variance)
+
+**Why MARS Wins?**
+
+- MARS has the lowest RMSE in both resampling and test.
+
+- It also has the highest R² (0.892 average in resampling, 0.868 on
+  test).
+
+- MARS handles interactions naturally
+
+*Check variable importance in the MARS model:*
+
+```{r}
+varImp(marsModel)
+# or
+summary(marsModel$finalModel)
+```
+
+**1. Does MARS select the informative predictors (X1–X5)?**
+
+*Yes — strongly.*
+
+**From the Importance section:**
+
+Importance: X1, X4, X2, X5, X3, all have nonzero importance (X1 = 100,
+X4 = 82, X2 = 63, X5 = 38, X3 = 25.8) X6, X7-unused, X8-unused,
+X9-unused, X10-unused
+
+MARS successfully identified all 5 informative predictors and correctly
+ignored (or nearly ignored) the 5 non-informative ones.
+
+#### 7.5 Exercise 6.3 describes data for a chemical manufacturing process. Use the same data imputation, data splitting, and pre-processing steps as before and train several nonlinear regression models.
+
+(a) **Which nonlinear regression model gives the optimal resampling and
+    test set performance?**
+
+```{r}
+# ============================================================
+# Exercise 7.5 - Nonlinear Regression Models
+# Chemical Manufacturing Process Dataset
+# Based on imputation, splitting, and pre-processing from 6.3
+# ============================================================
+
+
+
+# ============================================================
+# Step 1: Load Data (as in 6.3)
+# ============================================================
+library(AppliedPredictiveModeling)
+data(ChemicalManufacturingProcess)
+
+
+# The data: processPredictors (176x57), yield (176x1)
+# 57 predictors: 12 biological + 45 manufacturing process
+
+# Combine into one data frame for easier handling
+chem_data <- ChemicalManufacturingProcess
+# Note: The dataset already has column name "Yield"
+head(chem_data, 2)
+
+
+cat("Dataset dimensions:", dim(chem_data), "\n")
+cat("Missing values:", sum(is.na(chem_data)), "\n")
+```
+
+```{r impute}
+
+# ============================================================
+# Step 2: Impute Missing Values (as in 6.3)
+# ============================================================
+# Using k-nearest neighbors imputation (common approach from 6.3)
+
+# KNN Imputation (most common in solutions)
+set.seed(123)
+impute_preproc <- preProcess(chem_data, 
+                              method = c("knnImpute"), 
+                              k = 5)
+
+chem_imputed <- predict(impute_preproc, chem_data)
+
+# Verify no missing values remain
+cat("Missing values after imputation:", sum(is.na(chem_imputed)), "\n")
+
+```
+
+```{r train/test split}
+# ============================================================
+# Step 3: Split Data into Training and Test Sets
+# ============================================================
+set.seed(517)  # Using seed from exercise 6.3 solutions
+
+train_index <- createDataPartition(chem_imputed$Yield, 
+                                    p = 0.8, 
+                                    list = FALSE)
+
+train_data <- chem_imputed[train_index, ]
+test_data <- chem_imputed[-train_index, ]
+
+cat("Training set size:", nrow(train_data), "\n")
+cat("Test set size:", nrow(test_data), "\n")
+
+# Separate predictors and response
+train_x <- train_data %>% select(-Yield)
+train_y <- train_data$Yield
+test_x <- test_data %>% select(-Yield)
+test_y <- test_data$Yield
+```
+
+```{r}
+# ============================================================
+# Step 4: Define Training Control
+# ============================================================
+# Using repeated cross-validation for more stable estimates
+ctrl <- trainControl(method = "repeatedcv", 
+                     number = 10, 
+                     repeats = 3,
+                     verboseIter = FALSE)
+
+# Pre-processing options (center + scale for all models)
+preProc_options <- c("center", "scale")
+
+```
+
+```{r Train_Multiple_Nonlinear_Regression_Models}
+# ============================================================
+# Step 5: Train Multiple Nonlinear Regression Models
+# ============================================================
+
+# ---------- 5.1 k-Nearest Neighbors (KNN) ----------
+set.seed(456)
+knn_model <- train(x = train_x,
+                   y = train_y,
+                   method = "knn",
+                   preProc = preProc_options,
+                   tuneLength = 10,
+                   trControl = ctrl)
+
+cat("\n=== KNN Best Tuning Parameters ===\n")
+print(knn_model$bestTune)
+
+# ---------- 5.2 Neural Network (NNET) ----------
+set.seed(456)
+nnet_grid <- expand.grid(decay = c(0, 0.01, 0.1),
+                          size = c(1, 3, 5, 7))
+
+nnet_model <- train(x = train_x,
+                    y = train_y,
+                    method = "nnet",
+                    preProc = preProc_options,
+                    tuneGrid = nnet_grid,
+                    trControl = ctrl,
+                    linout = TRUE,
+                    trace = FALSE,
+                    maxit = 500)
+
+cat("\n=== Neural Network Best Tuning Parameters ===\n")
+print(nnet_model$bestTune)
+
+# ---------- 5.3 Random Forest (RF) ----------
+set.seed(456)
+rf_model <- train(x = train_x,
+                  y = train_y,
+                  method = "rf",
+                  preProc = preProc_options,
+                  tuneLength = 10,
+                  trControl = ctrl,
+                  importance = TRUE)
+
+cat("\n=== Random Forest Best Tuning Parameters ===\n")
+print(rf_model$bestTune)
+
+# ---------- 5.4 MARS (Earth) ----------
+set.seed(456)
+mars_grid <- expand.grid(degree = 1:2,
+                          nprune = 2:30)
+
+mars_model <- train(x = train_x,
+                    y = train_y,
+                    method = "earth",
+                    preProc = preProc_options,
+                    tuneGrid = mars_grid,
+                    trControl = ctrl)
+
+cat("\n=== MARS Best Tuning Parameters ===\n")
+print(mars_model$bestTune)
+
+# ---------- 5.5 Support Vector Machine (SVM) ----------
+set.seed(456)
+svm_model <- train(x = train_x,
+                   y = train_y,
+                   method = "svmRadial",
+                   preProc = preProc_options,
+                   tuneLength = 15,
+                   trControl = ctrl)
+
+cat("\n=== SVM Best Tuning Parameters ===\n")
+print(svm_model$bestTune)
+
+```
+
+```{r Evaluate_models}
+# ============================================================
+# Step 6: Evaluate Models on Training (Resampling) and Test Sets
+# ============================================================
+
+# Function to get training performance from train object
+get_training_performance <- function(model) {
+  results <- model$results
+  best_row <- which.min(results$RMSE)
+  data.frame(RMSE = results$RMSE[best_row],
+             Rsquared = results$Rsquared[best_row])
+}
+
+# Function to evaluate on test set
+evaluate_test <- function(model, test_x, test_y) {
+  predictions <- predict(model, newdata = test_x)
+  metrics <- postResample(pred = predictions, obs = test_y)
+  data.frame(RMSE = metrics[1], Rsquared = metrics[2])
+}
+
+# Collect results
+models_list <- list(KNN = knn_model,
+                    NeuralNet = nnet_model,
+                    RandomForest = rf_model,
+                    MARS = mars_model,
+                    SVM = svm_model)
+
+# Store results
+training_results <- data.frame()
+test_results <- data.frame()
+
+for (name in names(models_list)) {
+  train_perf <- get_training_performance(models_list[[name]])
+  train_perf$Model <- name
+  training_results <- rbind(training_results, train_perf)
+  
+  test_perf <- evaluate_test(models_list[[name]], test_x, test_y)
+  test_perf$Model <- name
+  test_results <- rbind(test_results, test_perf)
+}
+
+# Reorder columns
+training_results <- training_results[, c("Model", "RMSE", "Rsquared")]
+test_results <- test_results[, c("Model", "RMSE", "Rsquared")]
+
+# Sort by test RMSE (lower is better)
+test_results <- test_results[order(test_results$RMSE), ]
+
+cat("\n==================================================\n")
+cat("=== TRAINING (Resampling) Performance ===\n")
+cat("==================================================\n")
+print(training_results[order(training_results$RMSE), ])
+
+cat("\n==================================================\n")
+cat("=== TEST SET Performance ===\n")
+cat("==================================================\n")
+print(test_results)
+
+# ============================================================
+# Step 7: Answer to Question (a)
+# ============================================================
+
+cat("\n==================================================\n")
+cat("=== ANSWER TO QUESTION 7.5(a) ===\n")
+cat("==================================================\n")
+
+best_train_model <- training_results[which.min(training_results$RMSE), "Model"]
+best_test_model <- test_results[which.min(test_results$RMSE), "Model"]
+
+cat("Optimal resampling (training) performance:", best_train_model, "\n")
+cat("Optimal test set performance:", best_test_model, "\n")
+
+```
+
+**Optimal Performance:**
+
+**1. SVM performed best on test data**
+
+- Test RMSE = 0.515 (lowest by far)
+- Test R² = 0.750 (highest, tied with RF)
+- Training RMSE = 0.632 (good, not overfitting)
+- Best overall model for generalization
+
+**2. Random Forest was most consistent**
+
+- Test RMSE = 0.542 (second best)
+- Test R² = 0.753 (highest)
+- Training RMSE = 0.627 (best in resampling)
+- Very stable between training and test
+
+**3. MARS, KNN, and Neural Network underperformed**
+
+MARS: Test RMSE 0.615, R² 0.648 KNN: Test RMSE 0.658, R² 0.646
+NeuralNet: Test RMSE 0.742, R² 0.595 (worst by far)
+
+```{r Visual}
+# ============================================================
+#  Visual Comparison
+# ============================================================
+
+# Create comparison plot
+comparison_df <- rbind(
+  data.frame(Model = test_results$Model, Metric = "RMSE", Value = test_results$RMSE, Type = "Test"),
+  data.frame(Model = training_results$Model, Metric = "RMSE", Value = training_results$RMSE, Type = "Training")
+)
+
+library(ggplot2)
+ggplot(comparison_df, aes(x = reorder(Model, -Value), y = Value, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Model Performance Comparison - Chemical Manufacturing Process",
+       x = "Model", y = "RMSE (lower is better)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+(b) **Which predictors are most important in the optimal nonlinear
+    regression model? Do either the biological or process variables
+    dominate the list? How do the top ten important predictors compare
+    to the top ten predictors from the optimal linear model?**
+
+```{r}
+# ============================================================
+# Top 5 Predictors for All Nonlinear Models
+# ============================================================
+
+library(tidyverse)
+library(caret)
+
+# Function to classify predictors
+classify_predictor <- function(predictor) {
+  ifelse(grepl("BiologicalMaterial", predictor), "Biological", "Process")
+}
+
+# Extract top 5 predictors for each model
+get_top5 <- function(model, model_name) {
+  importance <- varImp(model, scale = TRUE)$importance
+  top5 <- importance %>%
+    rownames_to_column("Predictor") %>%
+    arrange(desc(Overall)) %>%
+    slice_head(n = 5) %>%
+    mutate(Model = model_name,
+           Type = classify_predictor(Predictor))
+  return(top5)
+}
+
+# Get top 5 for all nonlinear models
+all_top5 <- bind_rows(
+  get_top5(knn_model, "KNN"),
+  get_top5(nnet_model, "NeuralNet"),
+  get_top5(rf_model, "RandomForest"),
+  get_top5(mars_model, "MARS"),
+  get_top5(svm_model, "SVM")
+)
+
+# Display results
+print("=== Top 5 Predictors for All Nonlinear Models ===")
+print(all_top5)
+
+# Summary: Which variables appear most frequently?
+frequent_predictors <- all_top5 %>%
+  group_by(Predictor, Type) %>%
+  summarise(Appearances = n(), .groups = "drop") %>%
+  arrange(desc(Appearances))
+
+print("=== Most Frequently Important Predictors Across Models ===")
+print(frequent_predictors)
+
+# Dominance summary by model
+dominance <- all_top5 %>%
+  group_by(Model, Type) %>%
+  summarise(Count = n(), .groups = "drop") %>%
+  pivot_wider(names_from = Type, values_from = Count, values_fill = 0) %>%
+  mutate(Process_Pct = round(100 * Process / (Process + Biological), 1),
+         Biological_Pct = round(100 * Biological / (Process + Biological), 1))
+
+print("=== Biological vs Process Dominance by Model ===")
+print(dominance)
+
+# Overall dominance across all models
+total_dominance <- all_top5 %>%
+  group_by(Type) %>%
+  summarise(Total_Appearances = n()) %>%
+  mutate(Percentage = round(100 * Total_Appearances / sum(Total_Appearances), 1))
+
+print("=== Overall Dominance (All Nonlinear Models Combined) ===")
+print(total_dominance)
+```
+
+**ManufacturingProcess32** is universally important — robust finding
+across all modeling approaches
+
+**BiologicalMaterial06** is the most important biological variable
+(appears in 4 of 5 models)
+
+**MARS** stands out as the only model that completely excludes
+biological variables from its top 5
+
+**Model choice matters — NeuralNet and RandomForest** assign more weight
+to biological variables than KNN, SVM, or MARS
+
+(c) **Explore the relationships between the top predictors and the
+    response for the predictors that are unique to the optimal nonlinear
+    regression model. Do these plots reveal intuition about the
+    biological or process predictors and their relationship with
+    yield?**
+
+```{r}
+# ============================================================
+# 7.5(c) - Explore Relationships: Top 5 MARS Predictors vs Yield
+# ============================================================
+
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+
+# Extract top 5 predictors from MARS
+mars_importance <- varImp(mars_model, scale = TRUE)
+top_predictors <- rownames(mars_importance$importance)[
+  order(mars_importance$importance$Overall, decreasing = TRUE)[1:5]
+]
+
+# Create plot data
+plot_data <- train_data %>%
+  select(Yield, all_of(top_predictors))
+names(plot_data) <- c("Yield", "Top1", "Top2", "Top3", "Top4", "Top5")
+
+# Plot 1: Top predictor vs Yield
+p1 <- ggplot(plot_data, aes(x = Top1, y = Yield)) +
+  geom_point(alpha = 0.6, color = "steelblue") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = paste(top_predictors[1], "vs Yield"),
+       subtitle = paste("MARS Importance =", round(mars_importance$importance[top_predictors[1], "Overall"], 1)),
+       x = top_predictors[1], y = "Yield (%)") +
+  theme_minimal()
+
+# Plot 2: Second predictor vs Yield
+p2 <- ggplot(plot_data, aes(x = Top2, y = Yield)) +
+  geom_point(alpha = 0.6, color = "darkgreen") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = paste(top_predictors[2], "vs Yield"),
+       subtitle = paste("MARS Importance =", round(mars_importance$importance[top_predictors[2], "Overall"], 1)),
+       x = top_predictors[2], y = "Yield (%)") +
+  theme_minimal()
+
+# Plot 3: Third predictor vs Yield
+p3 <- ggplot(plot_data, aes(x = Top3, y = Yield)) +
+  geom_point(alpha = 0.6, color = "purple") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = paste(top_predictors[3], "vs Yield"),
+       subtitle = paste("MARS Importance =", round(mars_importance$importance[top_predictors[3], "Overall"], 1)),
+       x = top_predictors[3], y = "Yield (%)") +
+  theme_minimal()
+
+# Plot 4: Third predictor vs Yield
+p4 <- ggplot(plot_data, aes(x = Top4, y = Yield)) +
+  geom_point(alpha = 0.6, color = "purple") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = paste(top_predictors[4], "vs Yield"),
+       subtitle = paste("MARS Importance =", round(mars_importance$importance[top_predictors[4], "Overall"], 1)),
+       x = top_predictors[4], y = "Yield (%)") +
+  theme_minimal()
+
+# Plot 5: Third predictor vs Yield
+p5 <- ggplot(plot_data, aes(x = Top5, y = Yield)) +
+  geom_point(alpha = 0.6, color = "purple") +
+  geom_smooth(method = "loess", se = TRUE, color = "red") +
+  labs(title = paste(top_predictors[5], "vs Yield"),
+       subtitle = paste("MARS Importance =", round(mars_importance$importance[top_predictors[5], "Overall"], 1)),
+       x = top_predictors[5], y = "Yield (%)") +
+  theme_minimal()
+
+# Display all three plots
+grid.arrange(p1, p2, p3, ncol = 3)
+
+grid.arrange(p4, p5, ncol = 2)
+# Correlation summary
+cat("\nCorrelation with Yield:\n")
+cat(paste(top_predictors[1], ":", round(cor(plot_data$Top1, plot_data$Yield), 3), "\n"))
+cat(paste(top_predictors[2], ":", round(cor(plot_data$Top2, plot_data$Yield), 3), "\n"))
+cat(paste(top_predictors[3], ":", round(cor(plot_data$Top3, plot_data$Yield), 3), "\n"))
+cat(paste(top_predictors[4], ":", round(cor(plot_data$Top2, plot_data$Yield), 4), "\n"))
+cat(paste(top_predictors[5], ":", round(cor(plot_data$Top3, plot_data$Yield), 5), "\n"))
+
+```
+
+**Relationship Findings - Top 5 MARS Predictors vs Yield**
+
+- ManufacturingProcess32 (Importance = 100): Moderate positive
+  correlation (r = 0.605) — increasing this process variable improves
+  yield
+- ManufacturingProcess09 (Importance = 58.0): Moderate positive
+  correlation (r = 0.482) — also beneficial but less impactful than
+  Process32
+- ManufacturingProcess13 (Importance = 29.8): Moderate negative
+  correlation (r = -0.478) — higher values are associated with lower
+  yield
+- ManufacturingProcess01 (Importance = 17.4): Moderate positive
+  correlation (r = 0.483) — increasing this process variable improves
+  yield
+- ManufacturingProcess22 (Importance = 17.4): Moderate negative
+  correlation (r = -0.478) — higher values reduce yield, suggesting
+  optimal operation at lower levels
+
+**Intuition Revealed**
+
+- All five top predictors are process variables (not biological). To
+  maximize yield:
+
+- Increase ManufacturingProcess32, ManufacturingProcess09 and
+  ManufacturingProcess01
+
+- Decrease ManufacturingProcess13 and ManufacturingProcess22
+
+*These are actionable levers that can be controlled in real-time during
+manufacturing, unlike biological variables which are fixed raw material
+properties*
+
+------------------------------------------------------------------------
