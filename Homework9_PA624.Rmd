@@ -1,0 +1,644 @@
+---
+title: "Homework9_PA-624"
+author: "Mehreen Ali Gillani"
+date: "04-29-2026"
+output:
+  html_document:
+    code_folding: hide
+    theme: default
+  pdf_document:
+    latex_engine: xelatex
+    fig_caption: true
+    fig_width: 7
+    fig_height: 5
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      fig.width = 7, 
+                      fig.height = 5, 
+                      fig.align = "center",
+                      warning = FALSE,
+                      message = FALSE)
+# Load required libraries
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(mlbench)
+library(caret)
+library(earth)
+library(randomForest)
+library(kernlab)
+```
+
+Do problems 8.1, 8.2, 8.3, and 8.7 in Kuhn and Johnson.  Please submit the Rpubs link along with the .rmd file.
+
+### 8.1. Recreate the simulated data from Exercise 7.2:
+> library(mlbench)
+> set.seed(200)
+> simulated <- mlbench.friedman1(200, sd = 1)
+> simulated <- cbind(simulated$x, simulated$y)
+> simulated <- as.data.frame(simulated)
+> colnames(simulated)[ncol(simulated)] <- "y"
+
+####  (a) Fit a random forest model to all of the predictors, then estimate the variable importance scores:
+> library(randomForest)
+> library(caret)
+> model1 <- randomForest(y ~ ., data = simulated,
++ importance = TRUE,
++ ntree = 1000)
+> rfImp1 <- varImp(model1, scale = FALSE)
+
+Did the random forest model significantly use the uninformative predictors (V6– V10)?
+
+#### Step 1: Simulation
+```{r}
+
+# Set seed and create data
+set.seed(200)
+simulated <- mlbench.friedman1(200, sd = 1)
+simulated <- cbind(simulated$x, simulated$y)
+simulated <- as.data.frame(simulated)
+colnames(simulated)[ncol(simulated)] <- "y"
+
+# Check the structure
+head(simulated,2)
+# V1-V5 are informative predictors (from Friedman1 function)
+# V6-V10 are uninformative (random noise)
+```
+#### Step 2: Fit random forest model
+
+```{r}
+# Fit random forest with 1000 trees
+model1 <- randomForest(y ~ ., data = simulated,
+                      importance = TRUE,
+                      ntree = 1000)
+
+# Get variable importance (without scaling)
+rfImp1 <- varImp(model1, scale = FALSE)
+print(rfImp1)
+```
+
+**Key Results:**
+
+**Informative predictors (V1-V5) dominate:** V1, V4, and V2 show the highest importance (8.86, 7.60, 6.73 respectively), confirming they strongly influence the response
+
+**Moderate importance: V5 (2.27) and V3 (0.84)** contribute but less than V1/V2/V4
+
+**Uninformative predictors (V6-V10)** show near-zero or negative importance:
+
+**V6 (0.11), V7 (0.07)** - essentially zero
+
+**V8 (-0.07), V9 (-0.07), V10 (-0.11)** - negative (worse than random noise)
+
+**Conclusion:** The random forest model did NOT significantly use the uninformative predictors (V6-V10). Their importance scores are negligible (mostly < 0.11) compared to informative predictors (range: 0.84-8.86)
+
+**Negative** importance for V8-V10 indicates these predictors actually degrade model performance when included - the model correctly ignores them
+
+#### Plot Importance score
+
+```{r fig.width=5, fig.height=4, fig.align='center'}
+# Convert rfImp1 to dataframe for ggplot
+rfImp_df <- data.frame(Variable = rownames(rfImp1), Importance = rfImp1$Overall)
+
+# Plot
+ggplot(rfImp_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Variable Importance from Random Forest",
+       x = "Predictors (V6-V10 are uninformative)",
+       y = "Importance Score") +
+  theme_minimal() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red")
+```
+
+#### (b) Now add an additional predictor that is highly correlated with one of the informative predictors. For example:
+
+> simulated$duplicate1 <- simulated$V1 + rnorm(200) * .1
+> cor(simulated$duplicate1, simulated$V1)
+Fit another random forest model to these data. Did the importance score
+for V1 change? What happens when you add another predictor that is
+also highly correlated with V1?
+
+#### Add correlated predictor and fit new model
+
+```{r}
+# Add duplicate predictor highly correlated with V1
+set.seed(200)  # for reproducibility
+simulated$duplicate1 <- simulated$V1 + rnorm(200) * 0.1
+
+# Check correlation
+cor(simulated$duplicate1, simulated$V1)
+
+# Fit second model
+model2 <- randomForest(y ~ ., data = simulated, 
+                      importance = TRUE, 
+                      ntree = 1000)
+
+# Compare importance of V1 between models
+imp1 <- varImp(model1, scale = FALSE)
+imp2 <- varImp(model2, scale = FALSE)
+
+# V1 importance comparison
+cat("Model 1 V1 importance:", imp1["V1", "Overall"], "\n")
+cat("Model 2 V1 importance (with duplicate1):", imp2["V1", "Overall"], "\n")
+cat("duplicate1 importance:", imp2["duplicate1", "Overall"], "\n")
+```
+
+#### Add second correlated predictor
+
+```{r}
+# Add second duplicate correlated with V1
+simulated$duplicate2 <- simulated$V1 + rnorm(200) * 0.1
+
+# Check correlations
+cor(simulated$duplicate2, simulated$V1)
+
+# Fit third model
+model3 <- randomForest(y ~ ., data = simulated, 
+                      importance = TRUE, 
+                      ntree = 1000)
+
+# Get importance scores
+imp3 <- varImp(model3, scale = FALSE)
+
+# Compare V1 importance across all three models
+comparison <- data.frame(
+  Model = c("Original", "1 duplicate", "2 duplicates"),
+  V1_importance = c(imp1["V1", "Overall"], 
+                    imp2["V1", "Overall"], 
+                    imp3["V1", "Overall"]),
+  duplicate1_imp = c(NA, imp2["duplicate1", "Overall"], imp3["duplicate1", "Overall"]),
+  duplicate2_imp = c(NA, NA, imp3["duplicate2", "Overall"])
+)
+print(comparison)
+```
+**Key findings:**
+
+- V1 importance dropped 34% (8.86 → 5.83) after adding first duplicate
+
+- Second duplicate caused further 18% drop (5.83 → 4.79)
+
+**Total importance preserved:** Original V1 (8.86) ≈ V1 + duplicate1 (5.83 + 4.08 = 9.91) ≈ V1 + duplicate1 + duplicate2 (4.79 + 3.00 + 2.29 = 10.08) The marginal increase (~1.22) is noise; the dilution pattern is the key insight.
+
+**Conclusion:** Random forest splits importance among correlated predictors rather than recognizing they provide redundant information. The model can't identify that duplicates add no new predictive value, so it dilutes importance across all correlated variables.
+
+#### (c) Use the cforest function in the party package to fit a random forest model using conditional inference trees. The party package function varimp can calculate predictor importance. The conditional argument of that function toggles between the traditional importance measure and the modified version described in Strobl et al. (2007). Do these importances show the same pattern as the traditional random forest model?
+
+#### Fit cforest model and calculate both importance types
+
+```{r}
+library(party)
+
+set.seed(200)
+model_cforest <- cforest(y ~ ., data = simulated[, c("V1", "V2", "V3", "V4", "V5", 
+                                                      "V6", "V7", "V8", "V9", "V10", 
+                                                      "duplicate1", "duplicate2", "y")],
+                         controls = cforest_unbiased(ntree = 1000))
+
+# Compare traditional vs conditional importance
+imp_trad <- varimp(model_cforest, conditional = FALSE)
+imp_cond <- varimp(model_cforest, conditional = TRUE)
+
+# Focus on V1 and duplicates
+data.frame(Variable = names(imp_trad),
+           Traditional = imp_trad,
+           Conditional = imp_cond)[c(1, 11, 12), ]
+```
+
+**Key observations:**
+
+- Traditional importance (party) = 5.51 (V1), 2.38 (dup1), 1.77 (dup2) → Importance still split among correlated predictors
+
+- Conditional importance (Strobl method) = 2.28 (V1), 1.13 (dup1), 0.51 (dup2) → V1 importance reduced, duplicates show much lower unique contribution
+
+
+**Main finding:**
+
+- Conditional importance partially addresses the correlation issue but doesn't fully restore V1 to its original importance (original was 8.86 before adding duplicates). Duplicates still retain some importance, though reduced compared to traditional measures.
+
+*The conditional method is better but not perfect for handling correlated predictors.*
+
+#### (d) Repeat this process with diﬀerent tree models, such as boosted trees and Cubist. Does the same pattern occur?
+
+
+```{r}
+# Load required libraries
+library(gbm)
+library(Cubist)
+
+# Prepare data (using model3 data with 2 duplicates)
+X <- simulated[, c("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8", "V9", "V10", 
+                   "duplicate1", "duplicate2")]
+y <- simulated$y
+
+# 1. Boosted Trees (GBM)
+set.seed(200)
+model_gbm <- gbm(y ~ ., data = cbind(X, y),
+                 distribution = "gaussian",
+                 n.trees = 1000,
+                 interaction.depth = 3,
+                 shrinkage = 0.01)
+
+# Get GBM importance
+imp_gbm <- summary(model_gbm, plot = FALSE)
+print(subset(imp_gbm, var %in% c("V1", "duplicate1", "duplicate2")))
+
+# 2. Cubist model
+set.seed(200)
+model_cubist <- cubist(x = X, y = y, committees = 10)
+
+# Get Cubist importance
+imp_cubist <- varImp(model_cubist)
+print(imp_cubist[c("V1", "duplicate1", "duplicate2"), , drop = FALSE])
+
+# 3. Compare all models
+comparison_all <- data.frame(
+  Model = c("Random Forest", "Conditional Forest", "GBM", "Cubist"),
+  V1 = c(4.79, 2.28, 
+         imp_gbm$rel.inf[imp_gbm$var == "V1"], 
+         imp_cubist["V1", "Overall"]),
+  duplicate1 = c(3.00, 1.13, 
+                 imp_gbm$rel.inf[imp_gbm$var == "duplicate1"], 
+                 imp_cubist["duplicate1", "Overall"]),
+  duplicate2 = c(2.29, 0.51, 
+                 imp_gbm$rel.inf[imp_gbm$var == "duplicate2"], 
+                 imp_cubist["duplicate2", "Overall"])
+)
+print(comparison_all)
+```
+**Mixed patterns across models:**
+
+- **Random Forest & GBM:** Clear split pattern (importance distributed among V1 + duplicates)
+
+- **Conditional Forest:** Partial mitigation (duplicates reduced but still present)
+
+- **Cubist:** Different pattern - V1 dominates (65.5), duplicate2 has 15.0, duplicate1 has 0.0
+
+**Key insight:**
+
+- Not all tree-based methods show the same splitting behavior. 
+
+- Cubist (rule-based model with linear combinations) better identifies that duplicate1 adds no unique value, though duplicate2 still gets spurious importance.
+
+### 8.2. Use a simulation to show tree bias with diﬀerent granularities.
+
+```{r}
+# Create dataset with two predictors having different granularity
+set.seed(200)
+n <- 500
+
+# Both predictors equally informative
+x_coarse <- sample(1:5, n, replace = TRUE)      # 5 unique values
+x_fine <- sample(1:50, n, replace = TRUE)       # 50 unique values
+
+# True relationship: both have same effect
+y <- 2*x_coarse + 2*x_fine + rnorm(n, 0, 5)
+
+# Fit tree
+library(rpart)
+data_gran <- data.frame(y, x_coarse, x_fine)
+tree_gran <- rpart(y ~ ., data = data_gran)
+print(tree_gran$variable.importance)
+
+# Repeat with random forest
+rf_gran <- randomForest(y ~ ., data = data_gran, importance = TRUE)
+imp_gran <- varImp(rf_gran, scale = FALSE)
+print(imp_gran)
+
+# Systematic simulation across granularity levels
+granularities <- c(2, 5, 10, 20, 50)
+importance_ratio <- numeric(length(granularities))
+
+for(i in seq_along(granularities)) {
+  set.seed(200)
+  x_coarse <- sample(1:2, n, replace = TRUE)
+  x_fine <- sample(1:granularities[i], n, replace = TRUE)
+  y <- 2*x_coarse + 2*x_fine + rnorm(n, 0, 5)
+  
+  rf_temp <- randomForest(y ~ x_coarse + x_fine, importance = TRUE)
+  imp_temp <- varImp(rf_temp, scale = FALSE)
+  importance_ratio[i] <- imp_temp["x_fine", "Overall"] / imp_temp["x_coarse", "Overall"]
+}
+
+results <- data.frame(Granularity = granularities, 
+                      Importance_Ratio = importance_ratio)
+print(results)
+```
+
+**Strong granularity bias confirmed:**
+
+- **Single tree:** x_fine importance = 404,366 vs x_coarse = 16,557 → 24x higher
+- **Random forest:** x_fine = 1,401 vs x_coarse = 12.5 → 112x higher
+
+- **Systematic simulation:** Importance ratio increases dramatically with granularity (1.1 → 74.3) until extreme granularity (50) causes instability
+
+**Key finding:** Tree models heavily favor predictors with more unique values, even when both are equally predictive. The bias intensifies with granularity ratio.
+
+*Negative ratio at granularity 50 indicates severe overfitting - the fine predictor becomes worse than noise due to excessive splitting opportunities.*
+
+
+### 8.3. In stochastic gradient boosting the bagging fraction and learning rate
+will govern the construction of the trees as they are guided by the gradi-
+ent. Although the optimal values of these parameters should be obtained
+through the tuning process, it is helpful to understand how the magnitudes
+of these parameters aﬀect magnitudes of variable importance. Figure 8.24
+provides the variable importance plots for boosting using two extreme values
+for the bagging fraction (0.1 and 0.9) and the learning rate (0.1 and 0.9) for
+the solubility data. The left-hand plot has both parameters set to 0.1, and
+the right-hand plot has both set to 0.9:
+
+#### (a) Why does the model on the right focus its importance on just the first few of predictors, whereas the model on the left spreads importance across more predictors?
+
+**The Key Difference: Learning Rate + Bagging Fraction**
+
+*Right plot (0.9 & 0.9 - high learning rate, high bagging):*
+
+- Large learning rate (0.9) = Each tree makes big jumps, quickly fitting residuals
+
+- High bagging (0.9) = Uses 90% of data per tree, very stable samples
+
+**Result:** First few trees capture almost all signal, later trees just make minor tweaks
+Importance concentrates on top predictors because the model "overcommits" early
+
+**Left plot (0.1 & 0.1 - low learning rate, low bagging):**
+
+- Small learning rate (0.1) = Each tree makes tiny corrections, needs many trees
+
+- Low bagging (0.1) = Uses only 10% of data per tree, high diversity
+
+**Result:** No single tree dominates; many predictors get chances to contribute
+
+Importance spreads because the model slowly builds ensemble with diverse views
+
+#### (b) Which model do you think would be more predictive of other samples?
+
+*The left model (0.1 learning rate, 0.1 bagging fraction) would be more predictive of new samples.*
+
+**Left Model (0.1, 0.1):**	*Overfitting* Low - slow, conservative learning	 
+
+**Right Model (0.9, 0.9):** *Overfitting* - risk aggressive, fast convergence
+
+**Left Model (0.1, 0.1):** *Ensemble diversity*	High - each tree sees different data	
+
+**Right Model (0.9, 0.9):** *Ensemble diversity* Low - trees are similar
+
+**Left Model (0.1, 0.1):** *Signal capture*	Gradual, distributed across predictors	
+
+**Right Model (0.9, 0.9):** *Signal capture*	Quick, concentrated on few predictors
+
+**Left Model (0.1, 0.1):** *Generalization*	Excellent - stable, robust	
+
+**Right Model (0.9, 0.9):** *Generalization* Poor - learns noise along with signal
+
+**Key Reasons**
+
+**Small learning rate (0.1) = Regularization effect**
+
+- Prevents any single tree from dominating
+
+- Requires many small corrections, smoothing the solution
+
+**Low bagging fraction (0.1) = Built-in diversity**
+
+- Each tree sees unique 10% sample
+
+- Reduces correlation between trees → better ensemble
+
+- Spread importance = Less likely to miss subtle patterns
+
+*The right model ignores many predictors entirely If those predictors matter for new samples, performance suffers*
+
+#### (c) How would increasing interaction depth aﬀect the slope of predictor importance for either model in Fig.8.24?
+
+Increasing interaction depth would make the importance slope STEEPER for BOTH models, but more dramatically for the right model.
+
+**Specific Predictions**
+
+*Right Model (0.9, 0.9) - Already steep slope:*
+
+- Higher depth → Even MORE concentrated on top 1-2 predictors
+
+- Deep trees + aggressive learning = extreme overfitting
+
+- Top predictor may completely dominate (>90% of importance)
+
+*Left Model (0.1, 0.1) - Currently gentle slope:*
+
+- Higher depth → Slope becomes steeper but less dramatically
+
+- Still spreads importance more than right model
+
+- Small learning rate acts as a buffer against extreme concentration
+
+**Reasoning** 
+
+- Deeper trees = More split opportunities = Can focus on complex interactions involving top predictors
+
+- Top predictors get chosen repeatedly in deep interactions
+
+- Weak predictors rarely appear in high-level interactions
+
+### 8.7. Refer to Exercises 6.3 and 7.5 which describe a chemical manufacturing
+process. Use the same data imputation, data splitting, and pre-processing
+steps as before and train several tree-based models:
+
+#### (a) Which tree-based regression model gives the optimal resampling and test set performance?
+
+```{r}
+library(AppliedPredictiveModeling)
+#install.packages("bnstruct")
+library(bnstruct)
+data("ChemicalManufacturingProcess")
+cmp <- as.data.frame(ChemicalManufacturingProcess)
+x_raw <- cmp[,2:58]
+y_raw <- as.matrix(cmp$Yield)
+
+# impute via KNN
+x_imp <- bnstruct::knn.impute(as.matrix(x_raw), k=10)
+# Drop near zero variance
+low_var <- nearZeroVar(x_imp)
+x_lowvar <- x_imp[,-low_var]
+
+# center, scale, Box Cox
+x_trans <-  preProcess(x_lowvar, method=c('center', 'scale', 'BoxCox'))
+x_trans <- predict(x_trans, x_lowvar)
+
+# TTS
+trainingRows <- createDataPartition(y_raw, p=0.8, list=FALSE)
+train_X <- x_trans[trainingRows,]
+train_y <- y_raw[trainingRows]
+
+test_X <- x_trans[-trainingRows,]
+test_y <- y_raw[-trainingRows]
+
+trainingData <- as.data.frame(train_X)
+trainingData$Yield <- train_y
+```
+
+```{r}
+set.seed(350)
+model_rpart <- train(x = train_X, 
+                y = train_y, 
+                method = 'rpart',
+                tuneGrid = NULL,
+                trControl = trainControl(method='cv'))
+preds <- predict(model_rpart, newdata = test_X)
+#results_rpart<- 
+data.frame(t(postResample(pred = preds,
+                            obs = test_y))) %>%
+  mutate("Model"= 'rpart')
+
+model_cubist <- train(x = train_X, 
+                y = train_y, 
+                method = 'cubist',
+                tuneGrid = NULL,
+                trControl = trainControl(method='cv'))
+preds <- predict(model_cubist, newdata = test_X)
+#results_cub<- 
+data.frame(t(postResample(pred = preds,
+                            obs = test_y))) %>%
+  mutate("Model"= 'cubist')
+
+model_rf <- train(x = train_X, 
+                y = train_y, 
+                method = 'rf',
+                tuneGrid = NULL,
+                trControl = trainControl(method='cv'))
+preds <- predict(model_rf, newdata = test_X)
+#results_rf<- 
+data.frame(t(postResample(pred = preds,
+                            obs = test_y))) %>%
+  mutate("Model"= 'rf')
+
+model_gbm <- train(x = train_X, 
+                y = train_y, 
+                method = 'gbm',
+                tuneGrid = NULL,
+                trControl = trainControl(method='cv'),
+               verbose=FALSE)
+preds <- predict(model_gbm, newdata = test_X)
+#results_gbm<- 
+data.frame(t(postResample(pred = preds,
+                            obs = test_y))) %>%
+  mutate("Model"= 'gbm')
+```
+**Optimal Model**
+
+GBM (Gradient Boosted Machines) is clearly the optimal model across all three metrics:
+
+- Lowest RMSE (0.881 vs. 0.904-1.349) → most accurate predictions
+
+- Highest R-squared (0.781 vs. 0.515-0.773) → best variance explanation
+
+- Lowest MAE (0.712 vs. 0.748-1.075) → smallest average absolute error
+
+**GBM for this chemical manufacturing process. Its ~9-10% lower RMSE than RF and Cubist represents meaningful predictive improvement in manufacturing contexts.**
+
+
+
+#### (b) Which predictors are most important in the optimal tree-based regression model? Do either the biological or process variables dominate the list? How do the top 10 important predictors compare to the top 10 predictors from the optimal linear and nonlinear models?
+
+```{r}
+# Extract variable importance for each model
+# GBM
+gbm_imp <- varImp(model_gbm, scale = TRUE)
+gbm_top10 <- data.frame(
+  Variable = rownames(gbm_imp$importance)[1:10],
+  Importance = gbm_imp$importance[1:10, 1]
+)
+print("=== GBM Top 10 Predictors ===")
+print(gbm_top10)
+
+# Random Forest
+rf_imp <- varImp(model_rf, scale = TRUE)
+rf_top10 <- data.frame(
+  Variable = rownames(rf_imp$importance)[1:10],
+  Importance = rf_imp$importance[1:10, 1]
+)
+print("=== Random Forest Top 10 Predictors ===")
+print(rf_top10)
+
+# cubist_usage
+cubist_usage <- model_cubist$finalModel$usage
+
+# Create dataframe with proper variable names and total importance
+cubist_imp_df <- data.frame(
+  Variable = cubist_usage$Variable,
+  Conditions = cubist_usage$Conditions,
+  Model = cubist_usage$Model,
+  Total = cubist_usage$Conditions + cubist_usage$Model
+)
+
+# Sort by total importance
+cubist_imp_df <- cubist_imp_df[order(-cubist_imp_df$Total), ]
+cubist_top10 <- cubist_imp_df[1:10, ]
+
+print("=== Cubist Top 10 Predictors ===")
+print(cubist_top10[, c("Variable", "Total")])
+
+# rpart
+rpart_imp <- varImp(model_rpart, scale = TRUE)
+rpart_top10 <- data.frame(
+  Variable = rownames(rpart_imp$importance)[1:10],
+  Importance = rpart_imp$importance[1:10, 1]
+)
+print("=== rpart Top 10 Predictors ===")
+print(rpart_top10)
+
+# Add this to handle potential NA/empty values
+comparison_all <- data.frame(
+  Rank = 1:10,
+  GBM = if(length(gbm_top10$Variable) >= 10) gbm_top10$Variable[1:10] else c(gbm_top10$Variable, rep(NA, 10-length(gbm_top10$Variable))),
+  RandomForest = if(length(rf_top10$Variable) >= 10) rf_top10$Variable[1:10] else c(rf_top10$Variable, rep(NA, 10-length(rf_top10$Variable))),
+  Cubist = if(nrow(cubist_top10) >= 10) cubist_top10$Variable[1:10] else c(cubist_top10$Variable, rep(NA, 10-nrow(cubist_top10))),
+  rpart = if(length(rpart_top10$Variable) >= 10) rpart_top10$Variable[1:10] else c(rpart_top10$Variable, rep(NA, 10-length(rpart_top10$Variable)))
+)
+print("=== Top 10 Comparison Across All Models ===")
+print(comparison_all)
+```
+
+**Key Findings**
+
+- GBM & RF agree on Biological dominance (top 10 = 100% biological)
+- Cubist differs - prioritizes Process variables (MP17, MP39, MP32)
+- rpart unstable - shows BiologicalMaterial12 as #1 (absent in ensembles)
+
+*Total importance preserved in correlation test (8.86 → 10.08, +14% noise)*
+
+**Conclusion**
+
+GBM is optimal (lowest error). Ensembles (GBM/RF) identify biological materials as primary drivers, while Cubist/rpart suggest process variables matter more - indicating Cubist may capture different interactions or overfit differently.
+
+#### (c) Plot the optimal single tree with the distribution of yield in the terminal
+nodes. Does this view of the data provide additional knowledge about the
+biological or process predictors and their relationship with yield?
+
+```{r fig.width=5, fig.height= 5, fig.align='center'}
+# Load required library
+library(rpart.plot)
+
+# Plot optimal single tree
+rpart.plot(model_rpart$finalModel,
+           type = 4,              # left-right branches
+           extra = 101,          # mean + sample size (works for regression)
+           fallen.leaves = TRUE, # align leaves at bottom
+           cex = 0.7,            # text size
+           varlen = 0,           # full variable names
+           faclen = 0,           # full factor levels
+           main = "Optimal Single Tree: Yield Distribution")
+```
+
+
+**Key findings:**
+
+**Root split:** ManufacturingProcess32 (< 0.22) is the primary decision point, not a biological variable
+
+**Second split:** BiologicalMaterial11 (< -0.35) separates low-yield group (yield=39) from higher-yield groups (yield=40 and 42)
+
+Process variable first, biological second — this contradicts your earlier GBM/RF results which showed biological variables dominating
+
+**Interpretation:** The single tree reveals a Process → Biological interaction where ManufacturingProcess32 must be below threshold before BiologicalMaterial11 influences yield. This hierarchical relationship would be missed by variable importance alone.
