@@ -1,0 +1,226 @@
+---
+title: "Homework"
+author: "Mehreen Ali Gillani"
+date: "2026-05-06"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+### Introduction:
+
+Imagine 10000 receipts sitting on your table. Each receipt represents a transaction with items that were purchased. The receipt is a representation of stuff that went into a customer’s basket - and therefore ‘Market Basket Analysis’.
+
+That is exactly what the Groceries Data Set contains: a collection of receipts with each line representing 1 receipt and the items purchased. Each line is called a transaction and each column in a row represents an item.  The data set is attached.
+
+Your assignment is to use R to mine the data for association rules. You should report support, confidence and lift and your top 10 rules by lift. 
+
+Extra credit: do a simple cluster analysis on the data as well.  Use whichever packages you like.  
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+
+```
+
+### 1. Load the Groceres dataset
+
+```{r}
+# ================================
+# Market Basket Analysis & Clustering
+# Groceries Dataset
+# ================================
+
+# 1. Load required packages and dataset
+# install.packages(c("arules", "arulesViz", "factoextra", "cluster", "pheatmap"))
+library(arules)        # For association rules
+library(arulesViz)     # For visualizing rules (optional)
+library(cluster)       # For clustering
+library(factoextra)    # For visualizing clusters
+library(pheatmap)
+
+data("Groceries")
+summary(Groceries)
+
+
+```
+#### Dataset overview:
+
+- This dataset has 9835 transactions (receipts) and 169 items
+
+- Average basket size is 4.4 items, with most baskets containing 1-6 items (median = 3 items). 
+
+- The most frequently purchased item is "whole milk" (appearing in 2,513 baskets, 25.6% of transactions), followed by other vegetables, rolls/buns, soda, and yogurt.
+
+### 2. Mine association rules
+
+```{r}
+
+# Use Apriori algorithm with reasonable thresholds
+# (adjust support/confidence for meaningful rules)
+rules <- apriori(Groceries, 
+                 parameter = list(supp = 0.001,    # support threshold (0.1%)
+                                  conf = 0.5,      # confidence threshold (50%)
+                                  target = "rules",
+                                  minlen = 2))     # at least 2 items per rule
+
+# 4. Sort rules by lift (highest first)
+rules_by_lift <- sort(rules, by = "lift", decreasing = TRUE)
+```
+
+#### Apriori algorithm Output:
+
+- The Apriori algorithm generated 5,668 association rules using minimum support of 0.001 (at least 9 transactions) and confidence of 0.5. 
+
+- The algorithm successfully processed all 9,835 transactions with 169 items, reducing to 157 items after recoding (excluding items too rare to meet the support threshold). 
+
+- Rules include itemsets from size 2 up to size 6 as specified by maxlen=10.
+
+### 3. Display top 10 rules by lift with support, confidence, lift
+```{r}
+
+# ========== TOP 10 RULES BY LIFT ==========
+inspect(rules_by_lift[1:10])
+
+
+```
+#### TOP 10 RULES BY LIFT, Observation
+
+- The highest lift rule (18.99) shows that buying "Instant food products" and "soda" together makes customers 19 times more likely to buy "hamburger meat" than buying it randomly. 
+
+- All top 10 rules have lift values above 11, indicating strong positive associations, with 8 of the 10 rules involving dairy products (butter, cream cheese, yogurt) or meat items (hamburger meat, ham). 
+
+- Most rules have low support (0.001-0.002 or 10-19 transactions) but high confidence (50-67%), meaning these are niche but reliable purchasing patterns.
+
+
+### 4. Extra Credit: Cluster Analysis on Items
+
+```{r}
+
+# Create binary matrix (items x transactions)
+item_matrix <- t(as(Groceries, "matrix"))
+
+# Jaccard distance & hierarchical clustering
+item_dist <- dist(item_matrix, method = "binary")
+hc_items <- hclust(item_dist, method = "average")
+
+# Cut into 5 clusters
+clusters <- cutree(hc_items, k = 5)
+
+# Display results
+cat("\n========== ITEM CLUSTERS (k=5) ==========\n")
+for (i in 1:5) {
+  items_in_cluster <- names(clusters[clusters == i])
+  cat(paste0("\nCluster ", i, " (", length(items_in_cluster), " items):\n"))
+  cat(paste(items_in_cluster[1:min(10, length(items_in_cluster))], collapse = ", "))
+  if (length(items_in_cluster) > 10) cat(", ...")
+  cat("\n")
+}
+
+# bar plot of cluster sizes
+cluster_sizes <- table(clusters)
+
+barplot(cluster_sizes, 
+        main = "Item Cluster Sizes (k=5)",
+        xlab = "Cluster", 
+        ylab = "Number of Items",
+        col = 2:6,
+        names.arg = paste("Cluster", 1:5),
+        ylim = c(0, max(cluster_sizes) + 10))
+
+# Add count labels on bars
+text(x = 1:5, y = cluster_sizes + 5, 
+     labels = cluster_sizes, cex = 1.2)
+
+```
+
+
+**Interesting observation: cluster 1 has 165 items whereas cluster 2-5 has one item each.** 
+
+
+**Lets check those items frequency and figure out why its happening?**
+
+```{r}
+# Check frequency of singleton items
+itemFrequency(Groceries)[c("frozen chicken", "liqueur", 
+                            "make up remover", "sound storage medium")]
+```
+
+
+**Why 1 cluster has 165 items, others have 1 each**
+
+**Frequencies of the 4 "singleton" items:**
+
+- frozen chicken → appears in 6 receipts (0.06%)
+
+- liqueur → appears in 9 receipts (0.09%)
+
+- make up remover → appears in 8 receipts (0.08%)
+- sound storage medium → appears in 1 receipt (0.01%)
+The math: For Jaccard distance:
+
+If an item appears in only 1-9 transactions out of 9835
+
+It almost never co-occurs with any other item
+
+Intersection with any other item = 0 (or very tiny)
+
+Jaccard similarity = 0 → distance = 1 (maximum)
+
+*These items are statistical orphans - they don't cluster because they don't share baskets with others.*
+
+**Filter out rare items:**
+
+```{r}
+
+# Function to get cluster summary with different threshold 
+cluster_summary <- function(min_support, n_clusters = 4) {
+  # Filter items
+  keep_items <- itemFrequency(Groceries) >= min_support
+  data_filt <- Groceries[, keep_items]
+  
+  # Cluster
+  mat <- t(as(data_filt, "matrix"))
+  dist_mat <- dist(mat, method = "binary")
+  hc <- hclust(dist_mat, method = "average")
+  clusters <- cutree(hc, k = n_clusters)
+  
+  # Return clean results
+  list(
+    threshold = paste0(min_support * 100, "%"),
+    transactions = paste0(min_support * 9835, "+"),
+    items = ncol(data_filt),
+    cluster_sizes = as.vector(table(clusters)),
+    clusters = clusters
+  )
+}
+
+# Test different thresholds
+thresholds <- c(0.01, 0.005, 0.001)  # 1%, 0.5%, 0.1%
+n_transactions <- c(98, 49, 10)
+
+# output
+for(i in 1:3) {
+  result <- cluster_summary(thresholds[i])
+  cat("Threshold:", result$threshold, 
+      "| Min transactions:", n_transactions[i],
+      "| Items kept:", result$items, "\n")
+  cat("  Cluster sizes:", paste(result$cluster_sizes, collapse = ", "), "\n\n")
+}
+  
+
+```
+
+#### Key insight:
+
+- 1% threshold (98+ transactions) → Most balanced (81 items in main cluster, small outliers)
+
+- 0.5% or 0.1% → Highly skewed because rare items become singletons
+
+**Recommendation:** Use min_support = 0.005 (49+ transactions) for meaningful clusters without too many outliers.
+
+
+
+-----------------------------------------------
